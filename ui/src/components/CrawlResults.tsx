@@ -50,15 +50,13 @@ export const CrawlResults: React.FC<CrawlResultsProps> = ({ result }) => {
       {success && data && data.length > 0 && (
         <div className="extracted-data">
           <h4>Extracted Data ({data.length} items)</h4>
+          <p className="total-items">Total items: {data.length}</p>
           <div className="data-preview">
-            {data.slice(0, 5).map((item, idx) => (
+            {data.map((item, idx) => (
               <div key={idx} className="data-item">
                 <pre>{JSON.stringify(item, null, 2)}</pre>
               </div>
             ))}
-            {data.length > 5 && (
-              <p className="data-more">... and {data.length - 5} more items</p>
-            )}
           </div>
         </div>
       )}

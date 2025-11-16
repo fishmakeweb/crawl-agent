@@ -302,6 +302,42 @@ body {
   margin: 1.5rem 0;
 }
 
+.total-items {
+  font-weight: bold;
+  color: var(--accent-color);
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background: var(--bg-darker);
+  border-radius: 4px;
+}
+
+.data-preview {
+  max-height: 600px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0.5rem;
+  background: var(--bg-dark);
+}
+
+.data-preview::-webkit-scrollbar {
+  width: 8px;
+}
+
+.data-preview::-webkit-scrollbar-track {
+  background: var(--bg-darker);
+  border-radius: 4px;
+}
+
+.data-preview::-webkit-scrollbar-thumb {
+  background: var(--accent-color);
+  border-radius: 4px;
+}
+
+.data-preview::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-hover);
+}
+
 .data-item {
   background: var(--bg-color);
   padding: 1rem;
