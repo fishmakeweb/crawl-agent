@@ -9,7 +9,7 @@ interface FeedbackFormProps {
 }
 
 export const FeedbackForm: React.FC<FeedbackFormProps> = ({
-  jobId,
+  jobId: _jobId,
   onSubmit,
   disabled = false,
 }) => {

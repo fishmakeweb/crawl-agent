@@ -64,13 +64,16 @@ export const App: React.FC = () => {
       setWsConnected(wsService.isConnected());
     }, WS_CHECK_INTERVAL);
 
+    // Copy ref to local variable for cleanup
+    const timeoutsMap = notificationTimeoutsRef.current;
+
     return () => {
       wsService.off('all', handleMessage);
       clearInterval(checkConnection);
       wsService.disconnect();
       // Clean up all notification timeouts
-      notificationTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
-      notificationTimeoutsRef.current.clear();
+      timeoutsMap.forEach((timeout) => clearTimeout(timeout));
+      timeoutsMap.clear();
     };
   }, []);
 
