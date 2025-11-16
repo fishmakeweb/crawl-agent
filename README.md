@@ -1,4 +1,3 @@
-```markdown
 # Self-Learning Web Crawler Agent
 
 A self-improving web crawler system built on **Microsoft Agent-Lightning** that autonomously learns from execution results and user feedback.
@@ -289,4 +288,3 @@ export MODE="production"
 Part of the **CrawlData microservices platform**.
 
 ---
-```
