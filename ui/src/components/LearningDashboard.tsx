@@ -1,33 +1,69 @@
 // Dashboard component for visualizing learning progress and statistics
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { TrainingStats } from '../types';
 import { trainingApi } from '../services/api';
+
+// Constants
+const STATS_REFRESH_INTERVAL = 5000;
 
 export const LearningDashboard: React.FC = () => {
   const [stats, setStats] = useState<TrainingStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isLoadingRef = useRef(false);
 
-  useEffect(() => {
-    loadStats();
-    const interval = setInterval(loadStats, 5000); // Refresh every 5 seconds
-    return () => clearInterval(interval);
-  }, []);
+  const loadStats = useCallback(async () => {
+    // Prevent overlapping requests
+    if (isLoadingRef.current) {
+      return;
+    }
 
-  const loadStats = async () => {
+    isLoadingRef.current = true;
+
+    // Cancel previous request if still pending
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    abortControllerRef.current = new AbortController();
+
     try {
       const data = await trainingApi.getStats();
       setStats(data);
       setError(null);
     } catch (err) {
-      setError('Failed to load statistics');
-      console.error(err);
+      // Don't show error if request was aborted
+      if (err instanceof Error && err.name !== 'AbortError') {
+        setError('Failed to load statistics');
+        if (process.env.NODE_ENV === 'development') {
+          console.error(err);
+        }
+      }
     } finally {
       setLoading(false);
+      isLoadingRef.current = false;
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadStats();
+
+    // Poll for updates, ensuring previous request completes first
+    const interval = setInterval(() => {
+      loadStats();
+    }, STATS_REFRESH_INTERVAL);
+
+    return () => {
+      clearInterval(interval);
+      // Cancel any pending requests on unmount
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, [loadStats]);
 
   if (loading) {
     return <div className="dashboard-loading">Loading statistics...</div>;
@@ -147,5 +183,3 @@ export const LearningDashboard: React.FC = () => {
     </div>
   );
 };
-
-export default LearningDashboard;

@@ -5,10 +5,9 @@ import type { CrawlResult } from '../types';
 
 interface CrawlResultsProps {
   result: CrawlResult | null;
-  onRetry?: () => void;
 }
 
-export const CrawlResults: React.FC<CrawlResultsProps> = ({ result, onRetry }) => {
+export const CrawlResults: React.FC<CrawlResultsProps> = ({ result }) => {
   if (!result) {
     return (
       <div className="results-placeholder">
@@ -45,11 +44,6 @@ export const CrawlResults: React.FC<CrawlResultsProps> = ({ result, onRetry }) =
       {error && (
         <div className="error-message">
           <strong>Error:</strong> {error}
-          {onRetry && (
-            <button onClick={onRetry} className="btn-secondary">
-              Retry
-            </button>
-          )}
         </div>
       )}
 
@@ -92,5 +86,3 @@ export const CrawlResults: React.FC<CrawlResultsProps> = ({ result, onRetry }) =
     </div>
   );
 };
-
-export default CrawlResults;

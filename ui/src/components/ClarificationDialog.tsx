@@ -25,11 +25,11 @@ export const ClarificationDialog: React.FC<ClarificationDialogProps> = ({
   };
 
   return (
-    <div className="dialog-overlay">
-      <div className="dialog-content clarification-dialog">
+    <div className="dialog-overlay" role="presentation">
+      <div className="dialog-content clarification-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
         <div className="dialog-header">
-          <h3>Clarification Needed</h3>
-          <span className="confidence-badge">
+          <h3 id="dialog-title">Clarification Needed</h3>
+          <span className="confidence-badge" role="status" aria-live="polite">
             Confidence: {(confidence * 100).toFixed(0)}%
           </span>
         </div>
@@ -80,5 +80,3 @@ export const ClarificationDialog: React.FC<ClarificationDialogProps> = ({
     </div>
   );
 };
-
-export default ClarificationDialog;

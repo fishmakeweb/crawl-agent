@@ -17,9 +17,37 @@ export const CrawlJobForm: React.FC<CrawlJobFormProps> = ({
   const [url, setUrl] = useState('');
   const [description, setDescription] = useState('');
   const [requiredFields, setRequiredFields] = useState('');
+  const [urlError, setUrlError] = useState('');
+
+  const isValidUrl = (urlString: string): boolean => {
+    if (!urlString.trim()) return false;
+
+    try {
+      const parsedUrl = new URL(urlString);
+      return parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  };
+
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newUrl = e.target.value;
+    setUrl(newUrl);
+
+    if (newUrl.trim() && !isValidUrl(newUrl)) {
+      setUrlError('Please enter a valid HTTP or HTTPS URL');
+    } else {
+      setUrlError('');
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!isValidUrl(url)) {
+      setUrlError('Please enter a valid HTTP or HTTPS URL');
+      return;
+    }
 
     const job: CrawlJob = {
       url,
@@ -39,7 +67,7 @@ export const CrawlJobForm: React.FC<CrawlJobFormProps> = ({
     onSubmit(job);
   };
 
-  const isValid = url.trim() && description.trim();
+  const isValid = isValidUrl(url) && description.trim();
 
   return (
     <form onSubmit={handleSubmit} className="crawl-job-form">
@@ -49,12 +77,19 @@ export const CrawlJobForm: React.FC<CrawlJobFormProps> = ({
           id="url"
           type="url"
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
+          onChange={handleUrlChange}
           placeholder="https://example.com"
           required
           disabled={disabled}
           className="form-input"
+          aria-invalid={!!urlError}
+          aria-describedby={urlError ? 'url-error' : undefined}
         />
+        {urlError && (
+          <small id="url-error" className="form-error" role="alert">
+            {urlError}
+          </small>
+        )}
       </div>
 
       <div className="form-group">
@@ -101,5 +136,3 @@ export const CrawlJobForm: React.FC<CrawlJobFormProps> = ({
     </form>
   );
 };
-
-export default CrawlJobForm;

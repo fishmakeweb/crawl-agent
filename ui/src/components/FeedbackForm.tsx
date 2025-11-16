@@ -58,17 +58,20 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({
 
         <div className="feedback-suggestions">
           <p className="suggestions-label">Example feedback:</p>
-          <ul>
+          <div role="list">
             {suggestionExamples.map((example, idx) => (
-              <li
+              <button
                 key={idx}
-                onClick={() => !disabled && setFeedback(example)}
+                type="button"
+                onClick={() => setFeedback(example)}
+                disabled={disabled}
                 className="suggestion-item"
+                role="listitem"
               >
                 {example}
-              </li>
+              </button>
             ))}
-          </ul>
+          </div>
         </div>
 
         <button
@@ -82,5 +85,3 @@ export const FeedbackForm: React.FC<FeedbackFormProps> = ({
     </div>
   );
 };
-
-export default FeedbackForm;

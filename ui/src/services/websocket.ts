@@ -5,11 +5,16 @@ import type { WebSocketMessage } from '../types';
 
 const WS_URL = process.env.REACT_APP_TRAINING_SERVICE_URL || 'http://localhost:8001';
 
+// Constants
+const RECONNECTION_DELAY = 1000;
+const MAX_RECONNECTION_DELAY = 5000;
+const MAX_RECONNECT_ATTEMPTS = 5;
+
 class WebSocketService {
   private socket: Socket | null = null;
   private messageHandlers: Map<string, Set<(data: any) => void>> = new Map();
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
+  private maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS;
 
   connect() {
     if (this.socket?.connected) {
@@ -19,17 +24,21 @@ class WebSocketService {
     this.socket = io(WS_URL, {
       transports: ['websocket'],
       reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
+      reconnectionDelay: RECONNECTION_DELAY,
+      reconnectionDelayMax: MAX_RECONNECTION_DELAY,
     });
 
     this.socket.on('connect', () => {
-      console.log('WebSocket connected');
+      if (process.env.NODE_ENV === 'development') {
+        console.log('WebSocket connected');
+      }
       this.reconnectAttempts = 0;
     });
 
     this.socket.on('disconnect', () => {
-      console.log('WebSocket disconnected');
+      if (process.env.NODE_ENV === 'development') {
+        console.log('WebSocket disconnected');
+      }
     });
 
     this.socket.on('message', (message: WebSocketMessage) => {
@@ -37,10 +46,14 @@ class WebSocketService {
     });
 
     this.socket.on('connect_error', (error) => {
-      console.error('WebSocket connection error:', error);
+      if (process.env.NODE_ENV === 'development') {
+        console.error('WebSocket connection error:', error);
+      }
       this.reconnectAttempts++;
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        console.error('Max reconnection attempts reached');
+        if (process.env.NODE_ENV === 'development') {
+          console.error('Max reconnection attempts reached');
+        }
       }
     });
   }
@@ -51,6 +64,7 @@ class WebSocketService {
       this.socket = null;
     }
     this.messageHandlers.clear();
+    this.reconnectAttempts = 0;
   }
 
   on(eventType: string, handler: (data: any) => void) {

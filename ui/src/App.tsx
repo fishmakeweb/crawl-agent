@@ -1,17 +1,28 @@
 // Main application component tying everything together
 
-import React, { useState, useEffect } from 'react';
-import CrawlJobForm from './components/CrawlJobForm';
-import CrawlResults from './components/CrawlResults';
-import FeedbackForm from './components/FeedbackForm';
-import ClarificationDialog from './components/ClarificationDialog';
-import LearningDashboard from './components/LearningDashboard';
+import React, { useState, useEffect, useRef } from 'react';
+import { CrawlJobForm } from './components/CrawlJobForm';
+import { CrawlResults } from './components/CrawlResults';
+import { FeedbackForm } from './components/FeedbackForm';
+import { ClarificationDialog } from './components/ClarificationDialog';
+import { LearningDashboard } from './components/LearningDashboard';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { trainingApi } from './services/api';
 import wsService from './services/websocket';
 import type { CrawlJob, CrawlResult, FeedbackResponse, WebSocketMessage } from './types';
 import './App.css';
 
-function App() {
+// Constants
+const WS_CHECK_INTERVAL = 1000;
+const MAX_NOTIFICATIONS = 5;
+const NOTIFICATION_TIMEOUT = 5000;
+
+interface Notification {
+  id: string;
+  message: string;
+}
+
+export const App: React.FC = () => {
   const [currentResult, setCurrentResult] = useState<CrawlResult | null>(null);
   const [crawling, setCrawling] = useState(false);
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
@@ -23,14 +34,17 @@ function App() {
   } | null>(null);
   const [activeTab, setActiveTab] = useState<'training' | 'dashboard'>('training');
   const [wsConnected, setWsConnected] = useState(false);
-  const [notifications, setNotifications] = useState<string[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const notificationTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
   useEffect(() => {
     // Initialize WebSocket
     wsService.connect();
 
     const handleMessage = (message: WebSocketMessage) => {
-      console.log('WebSocket message:', message);
+      if (process.env.NODE_ENV === 'development') {
+        console.log('WebSocket message:', message);
+      }
 
       if (message.type === 'job_completed') {
         addNotification(`Job ${message.job_id?.substring(0, 8)} completed`);
@@ -48,20 +62,34 @@ function App() {
     // Check connection status
     const checkConnection = setInterval(() => {
       setWsConnected(wsService.isConnected());
-    }, 1000);
+    }, WS_CHECK_INTERVAL);
 
     return () => {
       wsService.off('all', handleMessage);
       clearInterval(checkConnection);
       wsService.disconnect();
+      // Clean up all notification timeouts
+      notificationTimeoutsRef.current.forEach((timeout) => clearTimeout(timeout));
+      notificationTimeoutsRef.current.clear();
     };
   }, []);
 
   const addNotification = (message: string) => {
-    setNotifications((prev) => [...prev, message].slice(-5)); // Keep last 5
-    setTimeout(() => {
-      setNotifications((prev) => prev.slice(1));
-    }, 5000);
+    const id = `${Date.now()}-${Math.random()}`;
+    const notification: Notification = { id, message };
+
+    setNotifications((prev) => {
+      const updated = [...prev, notification];
+      return updated.slice(-MAX_NOTIFICATIONS);
+    });
+
+    // Schedule removal of this specific notification
+    const timeout = setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      notificationTimeoutsRef.current.delete(id);
+    }, NOTIFICATION_TIMEOUT);
+
+    notificationTimeoutsRef.current.set(id, timeout);
   };
 
   const handleCrawlSubmit = async (job: CrawlJob) => {
@@ -74,16 +102,19 @@ function App() {
       setCurrentResult(result);
       setFeedbackRequired(true);
       addNotification('Crawl completed! Please provide feedback.');
-    } catch (error: any) {
-      console.error('Crawl failed:', error);
-      addNotification(`Crawl failed: ${error.message}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Crawl failed:', error);
+      }
+      addNotification(`Crawl failed: ${errorMessage}`);
     } finally {
       setCrawling(false);
     }
   };
 
   const handleFeedbackSubmit = async (feedback: string) => {
-    if (!currentResult) return;
+    if (!currentResult || submittingFeedback) return;
 
     setSubmittingFeedback(true);
 
@@ -105,16 +136,19 @@ function App() {
         setFeedbackRequired(false);
         addNotification('Feedback accepted! Agent is learning...');
       }
-    } catch (error: any) {
-      console.error('Feedback submission failed:', error);
-      addNotification(`Feedback failed: ${error.message}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Feedback submission failed:', error);
+      }
+      addNotification(`Feedback failed: ${errorMessage}`);
     } finally {
       setSubmittingFeedback(false);
     }
   };
 
   const handleClarificationResponse = async (response: string) => {
-    if (!currentResult || !clarificationNeeded) return;
+    if (!currentResult || !clarificationNeeded || submittingFeedback) return;
 
     setSubmittingFeedback(true);
 
@@ -140,9 +174,12 @@ function App() {
         setFeedbackRequired(false);
         addNotification('Feedback accepted after clarification!');
       }
-    } catch (error: any) {
-      console.error('Clarification submission failed:', error);
-      addNotification(`Clarification failed: ${error.message}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Clarification submission failed:', error);
+      }
+      addNotification(`Clarification failed: ${errorMessage}`);
     } finally {
       setSubmittingFeedback(false);
     }
@@ -164,9 +201,9 @@ function App() {
       </header>
 
       <div className="notifications">
-        {notifications.map((msg, idx) => (
-          <div key={idx} className="notification">
-            {msg}
+        {notifications.map((notification) => (
+          <div key={notification.id} className="notification" role="alert">
+            {notification.message}
           </div>
         ))}
       </div>
@@ -187,35 +224,37 @@ function App() {
       </div>
 
       <main className="app-content">
-        {activeTab === 'training' ? (
-          <div className="training-interface">
-            <div className="training-column">
-              <section className="section">
-                <h2>Submit Crawl Job</h2>
-                <CrawlJobForm onSubmit={handleCrawlSubmit} disabled={crawling} />
-              </section>
-            </div>
-
-            <div className="results-column">
-              <section className="section">
-                <h2>Crawl Results</h2>
-                <CrawlResults result={currentResult} />
-              </section>
-
-              {feedbackRequired && currentResult && (
-                <section className="section feedback-section">
-                  <FeedbackForm
-                    jobId={currentResult.job_id}
-                    onSubmit={handleFeedbackSubmit}
-                    disabled={submittingFeedback}
-                  />
+        <ErrorBoundary>
+          {activeTab === 'training' ? (
+            <div className="training-interface">
+              <div className="training-column">
+                <section className="section">
+                  <h2>Submit Crawl Job</h2>
+                  <CrawlJobForm onSubmit={handleCrawlSubmit} disabled={crawling} />
                 </section>
-              )}
+              </div>
+
+              <div className="results-column">
+                <section className="section">
+                  <h2>Crawl Results</h2>
+                  <CrawlResults result={currentResult} />
+                </section>
+
+                {feedbackRequired && currentResult && (
+                  <section className="section feedback-section">
+                    <FeedbackForm
+                      jobId={currentResult.job_id}
+                      onSubmit={handleFeedbackSubmit}
+                      disabled={submittingFeedback}
+                    />
+                  </section>
+                )}
+              </div>
             </div>
-          </div>
-        ) : (
-          <LearningDashboard />
-        )}
+          ) : (
+            <LearningDashboard />
+          )}
+        </ErrorBoundary>
       </main>
 
       {clarificationNeeded && (
@@ -234,6 +273,6 @@ function App() {
       </footer>
     </div>
   );
-}
+};
 
 export default App;
