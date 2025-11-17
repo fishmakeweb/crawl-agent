@@ -8,6 +8,8 @@ from typing import List, Optional, Dict, Any
 import hashlib
 import json
 import aiohttp
+from datetime import datetime, timedelta
+from collections import deque
 from config import GeminiConfig
 
 
@@ -140,13 +142,29 @@ class GeminiClient:
         self.local_llm_endpoint = config.LOCAL_LLM_ENDPOINT if config.LOCAL_LLM_ENABLED else None
         self.local_llm_threshold = config.LOCAL_LLM_THRESHOLD_CHARS
 
+        # Multi-model routing setup
+        self.models = {}
+        if config.ROUTING_ENABLED and hasattr(config, 'MODELS') and config.MODELS:
+            for model_id, model_config in config.MODELS.items():
+                self.models[model_id] = {
+                    "instance": genai.GenerativeModel(model_id),
+                    "config": model_config,
+                }
+        
+        # Rate limiting tracking (sliding window)
+        self.request_timestamps = deque(maxlen=100)
+        self.token_usage_window = deque(maxlen=100)
+
         # Cost tracking
         self.stats = {
             "gemini_calls": 0,
             "cache_hits": 0,
             "local_llm_calls": 0,
             "batched_requests": 0,
-            "total_requests": 0
+            "total_requests": 0,
+            "model_usage": {},
+            "rate_limit_warnings": 0,
+            "model_fallbacks": 0,
         }
 
     def _cache_key(self, prompt: str, **kwargs) -> str:
@@ -242,7 +260,18 @@ class GeminiClient:
     async def _call_gemini(self, prompt: str, **kwargs) -> str:
         """Direct Gemini API call"""
         try:
-            response = await self.model.generate_content_async(prompt, **kwargs)
+            # Handle response_mime_type parameter - needs to be in generation_config
+            if 'response_mime_type' in kwargs:
+                generation_config = genai.GenerationConfig(
+                    response_mime_type=kwargs.pop('response_mime_type')
+                )
+                response = await self.model.generate_content_async(
+                    prompt,
+                    generation_config=generation_config,
+                    **kwargs
+                )
+            else:
+                response = await self.model.generate_content_async(prompt, **kwargs)
             return response.text
         except Exception as e:
             print(f"❌ Gemini API error: {e}")
@@ -280,13 +309,26 @@ class GeminiClient:
         Returns structured interpretation + confidence score.
         """
 
+        # Extract actual data summary
+        extracted_data = context.get('data', [])
+        data_summary = "No data extracted"
+        if extracted_data and len(extracted_data) > 0:
+            item_count = len(extracted_data)
+            sample_fields = list(extracted_data[0].keys()) if extracted_data[0] else []
+            data_summary = f"{item_count} items extracted with fields: {sample_fields}"
+
+        # Schema for reference
+        schema = context.get('schema', {})
+        schema_info = f"Expected schema: {json.dumps(schema, indent=2)}" if schema else "No schema provided"
+
         prompt = f"""
 User provided this feedback on a web crawl:
 "{feedback}"
 
 Crawl context:
 - URL: {context.get('url', 'N/A')}
-- Extracted fields: {json.dumps(context.get('fields', {}), indent=2)}
+- Extraction result: {data_summary}
+- {schema_info}
 - Errors: {context.get('errors', [])}
 
 Interpret this feedback as structured learning signals:
@@ -323,6 +365,226 @@ Return as JSON only.
                 "clarification_question": "Could you please rephrase your feedback more specifically?"
             }
 
+    def _estimate_tokens(self, data: Any) -> int:
+        """Estimate token count for input data"""
+        if isinstance(data, str):
+            # Rough estimate: 1 token ≈ 4 characters
+            return len(data) // 4
+        elif isinstance(data, dict):
+            return len(json.dumps(data)) // 4
+        elif isinstance(data, list):
+            return sum(self._estimate_tokens(item) for item in data)
+        return 0
+
+    def _check_rate_limits(self, estimated_tokens: int) -> tuple:
+        """Check if we're approaching rate limits. Returns (is_safe, warning_msg)"""
+        now = datetime.now()
+        one_minute_ago = now - timedelta(minutes=1)
+        
+        # Clean old timestamps
+        while self.request_timestamps and self.request_timestamps[0] < one_minute_ago:
+            self.request_timestamps.popleft()
+        
+        while self.token_usage_window and self.token_usage_window[0][0] < one_minute_ago:
+            self.token_usage_window.popleft()
+        
+        # Calculate current usage
+        rpm = len(self.request_timestamps)
+        tpm = sum(tokens for _, tokens in self.token_usage_window)
+        
+        max_rpm = self.config.MAX_RPM
+        max_tpm = self.config.MAX_TPM
+        
+        # Check thresholds
+        rpm_pct = rpm / max_rpm if max_rpm > 0 else 0
+        tpm_pct = tpm / max_tpm if max_tpm > 0 else 0
+        
+        if tpm_pct >= self.config.TPM_WARNING_THRESHOLD:
+            return False, f"TPM at {tpm_pct*100:.1f}% ({tpm}/{max_tpm})"
+        if rpm_pct >= self.config.TPM_WARNING_THRESHOLD:
+            return False, f"RPM at {rpm_pct*100:.1f}% ({rpm}/{max_rpm})"
+        
+        return True, ""
+
+    def _select_model_for_task(
+        self,
+        task_type: str,
+        estimated_tokens: int,
+        mode: str,
+        current_cost: float
+    ) -> str:
+        """Select optimal model based on task type and constraints"""
+        
+        # Task-to-model mapping
+        task_routing = {
+            "crawl": {
+                "production": "gemini-2.0-flash",
+                "training": "gemini-2.0-flash",
+            },
+            "feedback": {
+                "production": "gemini-2.5-flash",
+                "training": "gemini-2.5-flash",
+            },
+            "clarification": {
+                "production": "learnlm-2.0-flash",
+                "training": "learnlm-2.0-flash",
+            },
+            "prompt_gen": {
+                "production": "gemini-2.5-flash",
+                "training": "gemini-2.5-flash",
+            },
+            "analysis": {
+                "production": "gemini-2.5-flash",
+                "training": "gemini-2.5-pro",  # Deep analysis in training
+            },
+            "rl_decide": {
+                "production": "gemini-2.5-flash",
+                "training": "gemini-2.5-flash",
+            },
+        }
+        
+        # Get base model
+        base_model = task_routing.get(task_type, {}).get(mode, "gemini-2.5-flash")
+        
+        # Apply complexity escalation
+        if estimated_tokens > self.config.COMPLEX_TASK_TOKEN_THRESHOLD:
+            if task_type == "analysis" and mode == "training":
+                base_model = "gemini-2.5-pro"
+            elif mode == "training":
+                base_model = "gemini-2.5-flash"
+        
+        # Check rate limits - fallback to lite if needed
+        is_safe, warning = self._check_rate_limits(estimated_tokens)
+        if not is_safe:
+            print(f"⚠️  Rate limit warning: {warning}, falling back to lite model")
+            self.stats["rate_limit_warnings"] += 1
+            base_model = "gemini-2.0-flash-lite"
+        
+        # Ensure model exists
+        if base_model not in self.models:
+            print(f"⚠️  Model {base_model} not available, using default")
+            base_model = self.config.MODEL
+        
+        return base_model
+
+    async def route_model(
+        self,
+        task_type: str,
+        input_data: dict,
+        current_metrics: dict
+    ) -> tuple:
+        """
+        Route request to optimal model based on task type and constraints.
+        
+        Args:
+            task_type: One of 'crawl', 'feedback', 'clarification', 'prompt_gen', 'analysis', 'rl_decide'
+            input_data: Dict containing 'prompt' and optional task-specific data
+            current_metrics: Dict with 'tokens_used', 'cost_usd', 'mode' ('production'|'training')
+        
+        Returns:
+            Tuple of (selected_model_id, response_text, updated_metrics)
+        """
+        
+        if not self.config.ROUTING_ENABLED or not self.models:
+            # Fallback to default behavior
+            response = await self.generate(input_data.get("prompt", ""))
+            return self.config.MODEL, response, current_metrics
+        
+        # Extract data
+        prompt = input_data.get("prompt", "")
+        mode = current_metrics.get("mode", "production")
+        
+        # Estimate tokens
+        estimated_tokens = self._estimate_tokens(input_data)
+        
+        # Select model
+        selected_model_id = self._select_model_for_task(
+            task_type=task_type,
+            estimated_tokens=estimated_tokens,
+            mode=mode,
+            current_cost=current_metrics.get("cost_usd", 0.0)
+        )
+        
+        print(f"🎯 Routing {task_type} ({estimated_tokens} est. tokens) → {selected_model_id}")
+        
+        # Track model usage
+        if selected_model_id not in self.stats["model_usage"]:
+            self.stats["model_usage"][selected_model_id] = 0
+        self.stats["model_usage"][selected_model_id] += 1
+        
+        # Execute with retry logic
+        max_retries = 2
+        retry_count = 0
+        last_error = None
+        
+        while retry_count <= max_retries:
+            try:
+                # Get model instance
+                model_info = self.models[selected_model_id]
+                model_instance = model_info["instance"]
+                
+                # Track request
+                self.request_timestamps.append(datetime.now())
+                self.token_usage_window.append((datetime.now(), estimated_tokens))
+                
+                # Handle special parameters
+                kwargs = {}
+                if input_data.get("json_mode"):
+                    kwargs["generation_config"] = genai.GenerationConfig(
+                        response_mime_type="application/json"
+                    )
+                
+                # Make API call
+                response = await model_instance.generate_content_async(prompt, **kwargs)
+                response_text = response.text
+                
+                # Estimate output tokens (rough)
+                output_tokens = self._estimate_tokens(response_text)
+                total_tokens = estimated_tokens + output_tokens
+                
+                # Calculate cost
+                model_config = model_info["config"]
+                input_cost = (estimated_tokens / 1_000_000) * model_config["cost_per_1m_input"]
+                output_cost = (output_tokens / 1_000_000) * model_config["cost_per_1m_output"]
+                request_cost = input_cost + output_cost
+                
+                # Update metrics
+                updated_metrics = {
+                    **current_metrics,
+                    "tokens_used": current_metrics.get("tokens_used", 0) + total_tokens,
+                    "cost_usd": current_metrics.get("cost_usd", 0.0) + request_cost,
+                    "last_model": selected_model_id,
+                    "last_request_cost": request_cost,
+                }
+                
+                return selected_model_id, response_text, updated_metrics
+                
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+                
+                # Handle rate limit (429) - retry with cheaper model
+                if "429" in error_str or "quota" in error_str.lower():
+                    print(f"⚠️  Rate limit hit on {selected_model_id}, falling back to lite")
+                    selected_model_id = "gemini-2.0-flash-lite"
+                    self.stats["model_fallbacks"] += 1
+                    retry_count += 1
+                    await asyncio.sleep(2 ** retry_count)  # Exponential backoff
+                    continue
+                
+                # Other errors - retry once then fail
+                if retry_count < max_retries:
+                    print(f"⚠️  Error on {selected_model_id}: {e}, retrying...")
+                    retry_count += 1
+                    await asyncio.sleep(1)
+                    continue
+                else:
+                    print(f"❌ Failed after {max_retries} retries: {e}")
+                    raise
+        
+        # Should not reach here, but handle gracefully
+        raise Exception(f"Request failed after retries: {last_error}")
+
     def get_stats(self) -> Dict[str, Any]:
         """Get usage statistics for cost monitoring"""
         total_requests = self.stats["total_requests"]
@@ -340,7 +602,8 @@ Return as JSON only.
             **self.stats,
             "cache_hit_rate": cache_hit_rate,
             "estimated_cost_usd": round(estimated_cost, 4),
-            "estimated_savings_usd": round(estimated_savings, 4)
+            "estimated_savings_usd": round(estimated_savings, 4),
+            "routing_enabled": self.config.ROUTING_ENABLED if hasattr(self.config, 'ROUTING_ENABLED') else False,
         }
 
     def reset_stats(self):
@@ -350,5 +613,8 @@ Return as JSON only.
             "cache_hits": 0,
             "local_llm_calls": 0,
             "batched_requests": 0,
-            "total_requests": 0
+            "total_requests": 0,
+            "model_usage": {},
+            "rate_limit_warnings": 0,
+            "model_fallbacks": 0,
         }

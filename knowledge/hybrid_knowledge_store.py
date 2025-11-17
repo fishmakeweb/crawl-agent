@@ -12,6 +12,43 @@ import json
 import asyncio
 from datetime import datetime
 import numpy as np
+import os
+import time
+import logging
+from functools import wraps
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def retry_connection(max_retries=None, delay=None):
+    """Retry decorator for database connections with exponential backoff"""
+    if max_retries is None:
+        max_retries = int(os.getenv("DB_MAX_RETRIES", "10"))
+    if delay is None:
+        delay = int(os.getenv("DB_RETRY_DELAY_SECONDS", "5"))
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        wait_time = delay * (2 ** attempt)  # Exponential backoff
+                        logger.warning(
+                            f"Connection attempt {attempt + 1}/{max_retries} failed: {e}. "
+                            f"Retrying in {wait_time}s..."
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"Connection failed after {max_retries} attempts: {e}")
+                        raise
+            return None
+        return wrapper
+    return decorator
 
 
 class HybridKnowledgeStore:
@@ -26,28 +63,12 @@ class HybridKnowledgeStore:
         self.config = config
         self.gemini_client = gemini_client
         self.rl_controller = rl_controller
-
-        # Vector store for semantic search
-        self.vector_store = QdrantClient(
-            host=config.QDRANT_HOST,
-            port=config.QDRANT_PORT
-        )
         self.collection_name = config.COLLECTION_NAME
 
-        # Graph store for relationships
-        self.graph_store = GraphDatabase.driver(
-            config.NEO4J_URI,
-            auth=(config.NEO4J_USER, config.NEO4J_PASSWORD)
-        )
-
-        # Cache layer for frequently accessed patterns
-        self.cache = redis.Redis(
-            host=config.REDIS_HOST,
-            port=config.REDIS_PORT,
-            db=config.REDIS_DB,
-            decode_responses=True
-        )
-        self.cache_ttl = config.CACHE_TTL_SECONDS
+        # Service availability flags
+        self.vector_available = False
+        self.graph_available = False
+        self.cache_available = False
 
         # Metrics for RL controller
         self.metrics = {
@@ -62,42 +83,106 @@ class HybridKnowledgeStore:
             "cache_misses": 0
         }
 
+        # Initialize connections with retry logic
+        self._connect_vector_store(config)
+        self._connect_graph_store(config)
+        self._connect_cache(config)
+
+        # Initialize schema
         self._init_schema()
+
+        # Log final status
+        logger.info(f"Knowledge Store initialized:")
+        logger.info(f"  ✓ Vector: {'Available' if self.vector_available else 'UNAVAILABLE'}")
+        logger.info(f"  {'✓' if self.graph_available else '✗'} Graph: {'Available' if self.graph_available else 'UNAVAILABLE (degraded mode)'}")
+        logger.info(f"  ✓ Cache: {'Available' if self.cache_available else 'UNAVAILABLE'}")
+
+    @retry_connection()
+    def _connect_vector_store(self, config):
+        """Connect to Qdrant vector store with retry"""
+        logger.info("Connecting to Qdrant vector store...")
+        self.vector_store = QdrantClient(
+            host=config.QDRANT_HOST,
+            port=config.QDRANT_PORT,
+            timeout=int(os.getenv("DB_CONNECTION_TIMEOUT_SECONDS", "30"))
+        )
+        # Test connection
+        self.vector_store.get_collections()
+        self.vector_available = True
+        logger.info(f"✅ Qdrant connected: {config.QDRANT_HOST}:{config.QDRANT_PORT}")
+
+    @retry_connection()
+    def _connect_graph_store(self, config):
+        """Connect to Neo4j graph store with retry (optional, graceful degradation)"""
+        logger.info("Connecting to Neo4j graph store...")
+        self.graph_store = GraphDatabase.driver(
+            config.NEO4J_URI,
+            auth=(config.NEO4J_USER, config.NEO4J_PASSWORD),
+            connection_timeout=int(os.getenv("DB_CONNECTION_TIMEOUT_SECONDS", "30"))
+        )
+        # Test connection
+        with self.graph_store.session() as session:
+            session.run("RETURN 1")
+        self.graph_available = True
+        logger.info(f"✅ Neo4j connected: {config.NEO4J_URI}")
+
+    @retry_connection()
+    def _connect_cache(self, config):
+        """Connect to Redis cache with retry"""
+        logger.info("Connecting to Redis cache...")
+        self.cache = redis.Redis(
+            host=config.REDIS_HOST,
+            port=config.REDIS_PORT,
+            db=config.REDIS_DB,
+            decode_responses=True,
+            socket_connect_timeout=int(os.getenv("DB_CONNECTION_TIMEOUT_SECONDS", "30"))
+        )
+        # Test connection
+        self.cache.ping()
+        self.cache_ttl = config.CACHE_TTL_SECONDS
+        self.cache_available = True
+        logger.info(f"✅ Redis connected: {config.REDIS_HOST}:{config.REDIS_PORT}")
 
     def _init_schema(self):
         """Initialize vector collection and graph schema"""
-        try:
-            # Create vector collection if not exists
-            self.vector_store.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(
-                    size=self.config.VECTOR_DIMENSION,
-                    distance=Distance.COSINE
+        # Vector store schema
+        if self.vector_available:
+            try:
+                # Create vector collection if not exists
+                self.vector_store.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(
+                        size=self.config.VECTOR_DIMENSION,
+                        distance=Distance.COSINE
+                    )
                 )
-            )
-            print(f"✅ Created vector collection: {self.collection_name}")
-        except Exception as e:
-            print(f"ℹ️  Vector collection exists or error: {e}")
+                logger.info(f"✅ Created vector collection: {self.collection_name}")
+            except Exception as e:
+                logger.info(f"ℹ️  Vector collection exists or creation skipped: {e}")
 
-        # Graph store schema
-        try:
-            with self.graph_store.session() as session:
-                # Create indexes for performance
-                session.run("""
-                    CREATE INDEX domain_idx IF NOT EXISTS
-                    FOR (d:Domain) ON (d.name)
-                """)
-                session.run("""
-                    CREATE INDEX pattern_idx IF NOT EXISTS
-                    FOR (p:Pattern) ON (p.id)
-                """)
-                session.run("""
-                    CREATE INDEX field_idx IF NOT EXISTS
-                    FOR (f:Field) ON (f.name)
-                """)
-                print("✅ Created graph indexes")
-        except Exception as e:
-            print(f"⚠️  Graph index creation error: {e}")
+        # Graph store schema (only if available)
+        if self.graph_available:
+            try:
+                with self.graph_store.session() as session:
+                    # Create indexes for performance
+                    session.run("""
+                        CREATE INDEX domain_idx IF NOT EXISTS
+                        FOR (d:Domain) ON (d.name)
+                    """)
+                    session.run("""
+                        CREATE INDEX pattern_idx IF NOT EXISTS
+                        FOR (p:Pattern) ON (p.id)
+                    """)
+                    session.run("""
+                        CREATE INDEX field_idx IF NOT EXISTS
+                        FOR (f:Field) ON (f.name)
+                    """)
+                    logger.info("✅ Created graph indexes")
+            except Exception as e:
+                logger.warning(f"⚠️  Graph index creation error: {e}")
+                self.graph_available = False
+        else:
+            logger.warning("⚠️  Skipping graph schema initialization (Neo4j unavailable)")
 
     async def store_pattern(self, pattern: Dict[str, Any]) -> bool:
         """Store pattern in all three layers"""

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import json
 import uuid
+import socketio
 
 from config import Config
 from gemini_client import GeminiClient
@@ -19,6 +20,15 @@ from knowledge.rl_controller import RLResourceController
 
 # Initialize
 app = FastAPI(title="Training Crawler Agent", version="1.0.0")
+
+# Initialize Socket.IO server
+sio = socketio.AsyncServer(
+    async_mode='asgi',
+    cors_allowed_origins='*',
+    logger=False,
+    engineio_logger=False
+)
+socket_app = socketio.ASGIApp(sio, app)
 
 # CORS
 app.add_middleware(
@@ -56,8 +66,26 @@ active_connections: List[WebSocket] = []
 job_queue = {}
 feedback_queue = {}
 
-print(f"🎓 Training Agent started on port 8001")
+print(f"🎓 Training Agent started on port 8091")
 print(f"   Update frequency: Every {config.training.UPDATE_FREQUENCY} rollouts")
+
+
+# Socket.IO Event Handlers
+@sio.event
+async def connect(sid, environ):
+    """Handle Socket.IO client connection"""
+    print(f"🔌 Socket.IO client connected: {sid}")
+    await sio.emit('connected', {'status': 'connected', 'sid': sid})
+
+@sio.event
+async def disconnect(sid):
+    """Handle Socket.IO client disconnection"""
+    print(f"🔌 Socket.IO client disconnected: {sid}")
+
+@sio.event
+async def ping(sid):
+    """Handle ping from client"""
+    await sio.emit('pong', room=sid)
 
 
 # Request models
@@ -112,6 +140,13 @@ async def train_crawl(request: TrainCrawlRequest):
         # Execute with current resources
         result = await agent.execute_crawl(task)
 
+        # Debug logging
+        print(f"📊 Crawl result keys: {result.keys()}")
+        print(f"📊 Data field type: {type(result.get('data'))}")
+        print(f"📊 Data length: {len(result.get('data', []))}")
+        if result.get('data'):
+            print(f"📊 First item: {result['data'][0] if result['data'] else 'None'}")
+
         # Calculate base reward
         base_reward = 0.8 if result["success"] else 0.2
 
@@ -126,10 +161,13 @@ async def train_crawl(request: TrainCrawlRequest):
         # Broadcast to WebSocket clients
         await broadcast_job_completed(job_id, result)
 
+        response_data = result.get("data", [])
+        print(f"📤 Returning {len(response_data)} items in HTTP response")
+
         return CrawlResponse(
             job_id=job_id,
             success=result["success"],
-            data=result.get("data", []),
+            data=response_data,
             metadata=result.get("metadata", {}),
             base_reward=base_reward,
             error=result.get("error")
@@ -153,8 +191,9 @@ async def submit_feedback(request: FeedbackRequest):
             request.feedback,
             context={
                 "url": job["task"]["url"],
-                "fields": job["task"].get("extraction_schema", {}),
-                "data": job["result"].get("data", [])
+                "schema": job["task"].get("extraction_schema", {}),  # Expected schema (template)
+                "data": job["result"].get("data", []),                # Actual extracted data
+                "errors": job["result"].get("error", None)
             }
         )
 
@@ -265,32 +304,36 @@ async def trigger_rl_decision():
 
 
 async def broadcast_job_completed(job_id: str, result: dict):
-    """Broadcast job completion to all WebSocket clients"""
-    message = json.dumps({
+    """Broadcast job completion to all Socket.IO clients"""
+    message = {
         "type": "job_completed",
         "job_id": job_id,
         "success": result["success"],
         "items_count": len(result.get("data", []))
-    })
-
+    }
+    await sio.emit('job_completed', message)
+    
+    # Also broadcast to native WebSocket clients for backward compatibility
     for connection in active_connections:
         try:
-            await connection.send_text(message)
+            await connection.send_text(json.dumps(message))
         except:
             pass
 
 
 async def broadcast_feedback_received(job_id: str, interpretation: dict):
-    """Broadcast feedback received to all WebSocket clients"""
-    message = json.dumps({
+    """Broadcast feedback received to all Socket.IO clients"""
+    message = {
         "type": "feedback_received",
         "job_id": job_id,
         "quality_rating": interpretation.get("quality_rating", 3)
-    })
-
+    }
+    await sio.emit('feedback_received', message)
+    
+    # Also broadcast to native WebSocket clients for backward compatibility
     for connection in active_connections:
         try:
-            await connection.send_text(message)
+            await connection.send_text(json.dumps(message))
         except:
             pass
 
@@ -319,4 +362,4 @@ async def shutdown_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(socket_app, host="0.0.0.0", port=8091)

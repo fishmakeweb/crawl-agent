@@ -39,8 +39,20 @@ class TrainingConfig:
 class GeminiConfig:
     """Gemini API configuration and optimization"""
     API_KEY: str
-    MODEL: str = "gemini-2.0-flash-exp"
+    MODEL: str = "gemini-2.5-flash"  # Stable model for agentic tasks
     EMBEDDING_MODEL: str = "models/text-embedding-004"
+
+    # Multi-model routing
+    ROUTING_ENABLED: bool = True
+    
+    # Rate limits (free tier defaults, upgrade for paid)
+    MAX_RPM: int = 15  # Requests per minute
+    MAX_TPM: int = 1000000  # Tokens per minute (1M for stable models)
+    TPM_WARNING_THRESHOLD: float = 0.8  # Warn at 80%
+    
+    # Complexity thresholds
+    COMPLEX_TASK_TOKEN_THRESHOLD: int = 5000
+    LARGE_BATCH_THRESHOLD: int = 10
 
     # Cost optimization
     CACHE_ENABLED: bool = True
@@ -55,6 +67,50 @@ class GeminiConfig:
     LOCAL_LLM_ENABLED: bool = False
     LOCAL_LLM_ENDPOINT: Optional[str] = None
     LOCAL_LLM_THRESHOLD_CHARS: int = 5000
+    
+    # Model definitions with costs and limits
+    MODELS: dict = None
+    
+    def __post_init__(self):
+        """Initialize model definitions if not provided"""
+        if self.MODELS is None:
+            self.MODELS = {
+                "gemini-2.0-flash": {
+                    "cost_per_1m_input": 0.15,
+                    "cost_per_1m_output": 0.60,
+                    "latency_avg_ms": 500,
+                    "rpm_limit": 15,
+                    "tpm_limit": 1000000,
+                },
+                "gemini-2.0-flash-lite": {
+                    "cost_per_1m_input": 0.075,
+                    "cost_per_1m_output": 0.30,
+                    "latency_avg_ms": 300,
+                    "rpm_limit": 30,
+                    "tpm_limit": 1500000,
+                },
+                "gemini-2.5-flash": {
+                    "cost_per_1m_input": 0.30,
+                    "cost_per_1m_output": 2.50,
+                    "latency_avg_ms": 800,
+                    "rpm_limit": 10,
+                    "tpm_limit": 1000000,
+                },
+                "gemini-2.5-pro": {
+                    "cost_per_1m_input": 1.25,
+                    "cost_per_1m_output": 5.00,
+                    "latency_avg_ms": 2000,
+                    "rpm_limit": 5,
+                    "tpm_limit": 500000,
+                },
+                "learnlm-2.0-flash": {
+                    "cost_per_1m_input": 0.25,
+                    "cost_per_1m_output": 1.00,
+                    "latency_avg_ms": 600,
+                    "rpm_limit": 15,
+                    "tpm_limit": 500000,
+                },
+            }
 
 
 @dataclass

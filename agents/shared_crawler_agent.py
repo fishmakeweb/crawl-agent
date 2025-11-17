@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Shared Crawler Agent Core
 Used by both Production and Training services
@@ -21,7 +23,9 @@ except ImportError:
     AGENTLIGHTNING_AVAILABLE = False
     # Mock classes for development
     class LitAgent:
-        pass
+        @classmethod
+        def __class_getitem__(cls, item):
+            return cls
     class NamedResources:
         pass
     class Rollout:
@@ -38,8 +42,14 @@ except ImportError:
 
 from crawl4ai_wrapper import Crawl4AIWrapper
 
+# Determine base class without using subscript in conditional
+if AGENTLIGHTNING_AVAILABLE:
+    _BaseAgent = LitAgent
+else:
+    _BaseAgent = object
 
-class SharedCrawlerAgent(LitAgent[Dict[str, Any]] if AGENTLIGHTNING_AVAILABLE else object):
+
+class SharedCrawlerAgent(_BaseAgent):
     """
     Shared agent core used by both Production and Training services.
     Mode determined by service context.
@@ -256,9 +266,18 @@ Return only the number (0.0-1.0).
                 max_pages=resources.get("crawl_config", {}).get("max_pages", 50)
             )
 
+            # Debug logging
+            print(f"🔍 intelligent_crawl returned keys: {result.keys()}")
+            print(f"🔍 'data' key exists: {'data' in result}")
+            print(f"🔍 'data' value type: {type(result.get('data'))}")
+            print(f"🔍 'data' length: {len(result.get('data', []))}")
+            
+            extracted_data = result.get("data", [])
+            print(f"🔍 Extracted data count: {len(extracted_data)}")
+
             return {
                 "success": result.get("success", False),
-                "data": result.get("data", []),
+                "data": extracted_data,
                 "metadata": {
                     "execution_time_ms": result.get("execution_time_ms", 0),
                     "pages_collected": result.get("navigation_result", {}).get("pages_collected", 0),

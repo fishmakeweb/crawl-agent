@@ -332,6 +332,12 @@ Return as JSON only.
         print(f"⚙️  Executing: {action_name}")
         print(f"   Parameters: {json.dumps(params, indent=2)}")
 
+        # Check if action requires Neo4j graph store
+        graph_required_actions = ["run_consolidation", "archive_old", "run_summarization"]
+        if action_name in graph_required_actions and not knowledge_store.graph_available:
+            print(f"   ⚠️  Skipping {action_name}: Neo4j graph store unavailable (degraded mode)")
+            return 0.0  # Neutral reward, no penalty for service unavailability
+
         # Record state before action
         metrics_before = knowledge_store.get_metrics()
 
