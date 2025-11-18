@@ -80,8 +80,8 @@ export const trainingApi = {
   },
 
   // Get training stats
-  async getStats(): Promise<TrainingStats> {
-    const response = await api.get('/stats');
+  async getStats(signal?: AbortSignal): Promise<TrainingStats> {
+    const response = await api.get('/stats', { signal });
     return response.data;
   },
 

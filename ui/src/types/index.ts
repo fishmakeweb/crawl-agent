@@ -70,11 +70,39 @@ export interface TrainingStats {
 }
 
 export interface WebSocketMessage {
-  type: 'job_completed' | 'feedback_received' | 'update_cycle' | 'error';
+  type: 'job_completed' | 'feedback_received' | 'update_cycle' | 'error' | 'crawl_log' | 'crawl_started' | 'pending_rollouts_updated' | 'learning_cycle_complete';
   job_id?: string;
   success?: boolean;
   items_count?: number;
   quality_rating?: number;
   cycle?: number;
   message?: string;
+}
+
+// Log entry from crawl4ai
+export interface CrawlLogEntry {
+  level: string;          // INFO, WARNING, ERROR, DEBUG
+  message: string;        // [INIT]...., [PLAN]...., etc.
+  logger: string;         // crawl4ai, crawl4ai_wrapper
+  timestamp: string;      // ISO timestamp
+  job_id: string | null;  // Current job ID context
+}
+
+// Pending rollouts update
+export interface PendingRolloutsUpdate {
+  pending_count: number;
+  update_frequency: number;
+  cycle: number;
+}
+
+// Learning cycle completion
+export interface LearningCycleComplete {
+  cycle: number;
+  resources_updated: boolean;
+  performance_metrics: {
+    successful_patterns: number;
+    failure_patterns: number;
+    feedback_insights: number;
+    avg_reward: number;
+  };
 }

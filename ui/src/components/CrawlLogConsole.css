@@ -1,0 +1,136 @@
+/* Crawl Log Console Styles */
+
+.log-console {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Courier New', 'Consolas', monospace;
+  font-size: 12px;
+  border-radius: 4px;
+  margin-top: 1rem;
+  overflow: hidden;
+  border: 1px solid #3e3e3e;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.log-console.expanded {
+  max-height: 450px;
+  transition: max-height 0.3s ease;
+}
+
+.log-console.collapsed {
+  max-height: 42px;
+  transition: max-height 0.3s ease;
+}
+
+.log-header {
+  background: #2d2d2d;
+  padding: 0.6rem 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #3e3e3e;
+  cursor: pointer;
+  user-select: none;
+}
+
+.log-header:hover {
+  background: #333333;
+}
+
+.log-title {
+  font-weight: 600;
+  color: #4ec9b0;
+  font-size: 13px;
+}
+
+.log-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.log-btn {
+  background: #3e3e3e;
+  color: #d4d4d4;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 0.25rem 0.5rem;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.log-btn:hover {
+  background: #505050;
+  border-color: #666;
+}
+
+.log-content {
+  max-height: 400px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.5rem;
+  background: #1e1e1e;
+}
+
+.log-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.log-content::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+.log-content::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+.log-content::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+.log-entry {
+  padding: 0.25rem 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.log-time {
+  color: #858585;
+  margin-right: 0.5rem;
+  font-size: 11px;
+}
+
+.log-message {
+  color: #d4d4d4;
+}
+
+.log-empty {
+  color: #858585;
+  font-style: italic;
+  text-align: center;
+  padding: 2rem;
+}
+
+/* Color coding by log type */
+.log-init .log-message { color: #569cd6; }      /* Blue */
+.log-plan .log-message { color: #c586c0; }      /* Purple */
+.log-fetch .log-message { color: #dcdcaa; }     /* Yellow */
+.log-nav .log-message { color: #4ec9b0; }       /* Cyan */
+.log-scrape .log-message { color: #6a9955; }    /* Green */
+.log-complete .log-message { color: #4ec9b0; }  /* Cyan */
+.log-info .log-message { color: #d4d4d4; }      /* White */
+.log-warning .log-message { color: #ff9800; }   /* Orange */
+.log-error .log-message { color: #f48771; }     /* Red */
+
+/* Responsive */
+@media (max-width: 768px) {
+  .log-console {
+    font-size: 11px;
+  }
+
+  .log-content {
+    max-height: 300px;
+  }
+}

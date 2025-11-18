@@ -45,6 +45,23 @@ class WebSocketService {
       this.handleMessage(message);
     });
 
+    // Listen for new Socket.IO events
+    this.socket.on('crawl_log', (log: any) => {
+      this.handleMessage({ type: 'crawl_log', ...log });
+    });
+
+    this.socket.on('crawl_started', (data: any) => {
+      this.handleMessage({ type: 'crawl_started', ...data });
+    });
+
+    this.socket.on('pending_rollouts_updated', (data: any) => {
+      this.handleMessage({ type: 'pending_rollouts_updated', ...data });
+    });
+
+    this.socket.on('learning_cycle_complete', (data: any) => {
+      this.handleMessage({ type: 'learning_cycle_complete', ...data });
+    });
+
     this.socket.on('connect_error', (error) => {
       if (process.env.NODE_ENV === 'development') {
         console.error('WebSocket connection error:', error);

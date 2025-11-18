@@ -7,9 +7,10 @@ import { FeedbackForm } from './components/FeedbackForm';
 import { ClarificationDialog } from './components/ClarificationDialog';
 import { LearningDashboard } from './components/LearningDashboard';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { CrawlLogConsole } from './components/CrawlLogConsole';
 import { trainingApi } from './services/api';
 import wsService from './services/websocket';
-import type { CrawlJob, CrawlResult, FeedbackResponse, WebSocketMessage } from './types';
+import type { CrawlJob, CrawlResult, FeedbackResponse, WebSocketMessage, LearningCycleComplete } from './types';
 import './App.css';
 
 // Constants
@@ -24,6 +25,7 @@ interface Notification {
 
 export const App: React.FC = () => {
   const [currentResult, setCurrentResult] = useState<CrawlResult | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [crawling, setCrawling] = useState(false);
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [feedbackRequired, setFeedbackRequired] = useState(false);
@@ -52,6 +54,15 @@ export const App: React.FC = () => {
         addNotification('Feedback processed successfully');
       } else if (message.type === 'update_cycle') {
         addNotification(`Learning cycle ${message.cycle} completed!`);
+      } else if (message.type === 'learning_cycle_complete') {
+        const data = message as unknown as LearningCycleComplete;
+        if (data?.cycle && data?.performance_metrics?.avg_reward !== undefined) {
+          addNotification(
+            `🎓 Learning Cycle ${data.cycle} Complete! Avg Reward: ${data.performance_metrics.avg_reward.toFixed(2)}`
+          );
+        } else {
+          addNotification('🎓 Learning Cycle Complete!');
+        }
       } else if (message.type === 'error') {
         addNotification(`Error: ${message.message}`);
       }
@@ -98,11 +109,13 @@ export const App: React.FC = () => {
   const handleCrawlSubmit = async (job: CrawlJob) => {
     setCrawling(true);
     setCurrentResult(null);
+    setCurrentJobId(null);
     setFeedbackRequired(false);
 
     try {
       const result = await trainingApi.submitCrawl(job);
       setCurrentResult(result);
+      setCurrentJobId(result.job_id);  // Track current job ID for logs
       setFeedbackRequired(true);
       addNotification('Crawl completed! Please provide feedback.');
     } catch (error) {
@@ -241,6 +254,7 @@ export const App: React.FC = () => {
                 <section className="section">
                   <h2>Crawl Results</h2>
                   <CrawlResults result={currentResult} />
+                  <CrawlLogConsole jobId={currentJobId} isActive={crawling} />
                 </section>
 
                 {feedbackRequired && currentResult && (

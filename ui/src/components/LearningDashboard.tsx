@@ -2,8 +2,9 @@
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import type { TrainingStats } from '../types';
+import type { TrainingStats, PendingRolloutsUpdate } from '../types';
 import { trainingApi } from '../services/api';
+import wsService from '../services/websocket';
 
 // Constants
 const STATS_REFRESH_INTERVAL = 5000;
@@ -12,6 +13,9 @@ export const LearningDashboard: React.FC = () => {
   const [stats, setStats] = useState<TrainingStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [maxRollouts, setMaxRollouts] = useState<number>(5);
+  const [currentCycle, setCurrentCycle] = useState<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isLoadingRef = useRef(false);
 
@@ -31,12 +35,12 @@ export const LearningDashboard: React.FC = () => {
     abortControllerRef.current = new AbortController();
 
     try {
-      const data = await trainingApi.getStats();
+      const data = await trainingApi.getStats(abortControllerRef.current.signal);
       setStats(data);
       setError(null);
     } catch (err) {
       // Don't show error if request was aborted
-      if (err instanceof Error && err.name !== 'AbortError') {
+      if (err instanceof Error && err.name !== 'AbortError' && err.name !== 'CanceledError') {
         setError('Failed to load statistics');
         if (process.env.NODE_ENV === 'development') {
           console.error(err);
@@ -56,8 +60,19 @@ export const LearningDashboard: React.FC = () => {
       loadStats();
     }, STATS_REFRESH_INTERVAL);
 
+    // Listen for real-time rollout updates
+    const handleRolloutUpdate = (data: any) => {
+      const update = data as PendingRolloutsUpdate;
+      setPendingCount(update.pending_count);
+      setMaxRollouts(update.update_frequency);
+      setCurrentCycle(update.cycle);
+    };
+
+    wsService.on('pending_rollouts_updated', handleRolloutUpdate);
+
     return () => {
       clearInterval(interval);
+      wsService.off('pending_rollouts_updated', handleRolloutUpdate);
       // Cancel any pending requests on unmount
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -89,10 +104,18 @@ export const LearningDashboard: React.FC = () => {
       <div className="stats-grid">
         <div className="stat-card">
           <h4>Training Progress</h4>
-          <div className="stat-value">{update_cycle}</div>
+          <div className="stat-value">{currentCycle || update_cycle}</div>
           <div className="stat-label">Update Cycles</div>
-          <div className="stat-detail">
-            Pending Rollouts: {pending_rollouts} / 5
+          <div className="rollout-progress">
+            <div className="progress-bar">
+              <div
+                className="progress-fill"
+                style={{ width: `${((pendingCount || pending_rollouts) / (maxRollouts || 5)) * 100}%` }}
+              />
+            </div>
+            <div className="stat-detail">
+              Pending Rollouts: {pendingCount || pending_rollouts} / {maxRollouts || 5}
+            </div>
           </div>
         </div>
 
