@@ -7,6 +7,7 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from collections import defaultdict
+from knowledge.feedback_repository import FeedbackRepository
 
 
 try:
@@ -28,13 +29,20 @@ class SelfImprovingCrawlerAlgorithm(Algorithm if AGENTLIGHTNING_AVAILABLE else o
     - Prompt quality (A/B testing and correlation)
     """
 
-    def __init__(self, gemini_client, knowledge_store, update_frequency: int = 5):
+    def __init__(
+        self,
+        gemini_client,
+        knowledge_store,
+        update_frequency: int = 5,
+        feedback_repository: Optional[FeedbackRepository] = None
+    ):
         self.gemini_client = gemini_client
         self.knowledge_store = knowledge_store
         self.update_frequency = update_frequency
         self.current_cycle = 0
         self.pending_rollouts = []
         self.feedback_queue = []
+        self.feedback_repository = feedback_repository or FeedbackRepository()
 
         # Learning history
         self.performance_history = []
@@ -285,6 +293,12 @@ class SelfImprovingCrawlerAlgorithm(Algorithm if AGENTLIGHTNING_AVAILABLE else o
                 "timestamp": datetime.now().isoformat()
             })
 
+        if self.feedback_repository:
+            try:
+                self.feedback_repository.save_feedback(insights)
+            except Exception as exc:
+                print(f"     ⚠️  Failed to persist feedback: {exc}")
+
         return insights
 
     def _parse_feedback_directly(self, feedback: str) -> Dict:
@@ -485,6 +499,99 @@ Cycle {self.current_cycle} Learning Summary:
                 print(f"     ⚠️  Potential overfitting detected (gap: {gap:.3f})")
             else:
                 print(f"     ✓ Generalization good (gap: {gap:.3f})")
+
+    async def learn_from_interactive_rollouts(self, rollout_data: List[Dict]) -> Dict[str, Any]:
+        """
+        Learn from interactive API rollouts (not batch mode)
+        Similar to learn_from_cycle() but adapted for job_queue data structure
+        """
+        print(f"\n  📚 Learning from {len(rollout_data)} interactive rollouts...")
+
+        # Convert job queue data to span-like format
+        successful_patterns = []
+        failure_patterns = []
+
+        for rollout in rollout_data:
+            if rollout['reward'] > 0.7:
+                # Extract successful pattern
+                successful_patterns.append({
+                    'id': rollout['id'],
+                    'type': 'successful_crawl',
+                    'domain': self._extract_domain_from_url(rollout['task']['url']),
+                    'success_rate': rollout['reward'],
+                    'frequency': 1,
+                    'metadata': rollout['result'].get('metadata', {}),
+                    'description': f"Successful crawl for {rollout['task']['url']}"
+                })
+            elif rollout['reward'] < 0.3:
+                # Extract failure pattern
+                failure_patterns.append({
+                    'id': rollout['id'],
+                    'type': 'failure_pattern',
+                    'error': rollout['result'].get('error', 'Unknown error'),
+                    'domain': self._extract_domain_from_url(rollout['task']['url']),
+                    'occurrences': 1
+                })
+
+        print(f"     ✓ Found {len(successful_patterns)} successful patterns")
+        print(f"     ✓ Analyzed {len(failure_patterns)} failure patterns")
+
+        # Process feedback from queue
+        feedback_insights = []
+        for rollout in rollout_data:
+            if rollout['metadata'].get('user_feedback'):
+                feedback_insights.append({
+                    'rollout_id': rollout['id'],
+                    'original_feedback': rollout['metadata']['user_feedback'],
+                    'domain': self._extract_domain_from_url(rollout['task']['url']),
+                    'timestamp': datetime.now().isoformat()
+                })
+
+        print(f"     ✓ Processed {len(feedback_insights)} feedback items")
+
+        # Update knowledge store
+        print(f"\n  💾 Updating knowledge store...")
+        await self.knowledge_store.add_patterns(successful_patterns)
+        await self.knowledge_store.add_failure_patterns(failure_patterns)
+        await self.knowledge_store.add_feedback_insights(feedback_insights)
+        print(f"     ✓ Knowledge store updated")
+
+        # Generate improved prompts
+        print(f"\n  🧠 Generating improved prompts...")
+        improved_prompts = await self._generate_improved_prompts(successful_patterns, feedback_insights)
+        print(f"     ✓ Prompts improved")
+
+        # Generate improved configs
+        print(f"\n  ⚙️  Optimizing crawl configurations...")
+        improved_configs = self._synthesize_crawl_configs(successful_patterns, failure_patterns)
+        print(f"     ✓ Configs optimized")
+
+        # Get domain patterns
+        domain_patterns = self.knowledge_store.get_domain_patterns()
+        print(f"     ✓ Domain patterns: {len(domain_patterns)} domains")
+
+        # Track performance
+        avg_reward = sum(r['reward'] for r in rollout_data) / len(rollout_data) if rollout_data else 0.0
+        self.performance_history.append({
+            'cycle': self.current_cycle,
+            'avg_reward': avg_reward,
+            'timestamp': datetime.now().isoformat()
+        })
+
+        print(f"\n  📈 Average reward: {avg_reward:.3f}")
+
+        return {
+            'extraction_prompt': improved_prompts,
+            'crawl_config': improved_configs,
+            'domain_patterns': domain_patterns,
+            'knowledge_version': self.current_cycle,
+            'performance_metrics': {
+                'successful_patterns': len(successful_patterns),
+                'failure_patterns': len(failure_patterns),
+                'feedback_insights': len(feedback_insights),
+                'avg_reward': avg_reward
+            }
+        }
 
     async def _final_update(self, store):
         """Final update with remaining rollouts"""

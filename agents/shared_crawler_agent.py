@@ -11,8 +11,13 @@ import json
 import asyncio
 from datetime import datetime
 
-# Add crawl4ai-agent to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../crawl4ai-agent'))
+# Add crawl4ai-agent to path (container-aware)
+if os.path.exists('/app/crawl4ai-agent'):
+    # Docker container path
+    sys.path.append('/app/crawl4ai-agent')
+else:
+    # Local development path
+    sys.path.append(os.path.join(os.path.dirname(__file__), '../../crawl4ai-agent'))
 
 try:
     from agentlightning import LitAgent, NamedResources, Rollout
@@ -58,8 +63,13 @@ class SharedCrawlerAgent(_BaseAgent):
     def __init__(self, gemini_client, mode: str = "production"):
         self.gemini_client = gemini_client
         self.mode = mode  # "production" or "training"
-        self.base_crawler = Crawl4AIWrapper()
+        # TEST_MARKER_2025_11_18: Pass GeminiClient to crawler for cost optimization and fallback handling
+        self.base_crawler = Crawl4AIWrapper(gemini_client=gemini_client)
         print(f"🤖 Shared Crawler Agent initialized in {mode.upper()} mode")
+
+    async def answer_query(self, context: str, query: str) -> str:
+        """Delegate RAG query to base crawler"""
+        return await self.base_crawler.answer_query(context, query)
 
     def rollout(self, task: Dict[str, Any], resources: NamedResources,
                 rollout: Rollout) -> float:

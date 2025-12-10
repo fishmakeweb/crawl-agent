@@ -37,11 +37,11 @@ fi
 # Step 4: Check if training server is running
 echo -e "${YELLOW}🔍 Checking training server status...${NC}"
 if docker ps | grep -q training-server; then
-    echo -e "${GREEN}✅ Training server is running on port 8091${NC}"
+    echo -e "${GREEN}✅ Training server is running (mapped to port 8091)${NC}"
 else
     echo -e "${RED}⚠️  Training server is not running!${NC}"
     echo -e "${YELLOW}Starting training server...${NC}"
-    
+
     cd /root/projects/crawldata/MCP-Servers
     docker run -d --name training-server \
         --restart unless-stopped \
@@ -49,11 +49,15 @@ else
         --env-file self-learning-agent/.env \
         -v $(pwd)/self-learning-agent/knowledge_db:/app/knowledge_db \
         self-learning-agent-training:latest
-    
+
+    # Connect to docker-compose network for infrastructure access
+    echo -e "${YELLOW}🔗 Connecting to infrastructure network...${NC}"
+    docker network connect self-learning-agent_selflearning-network training-server 2>/dev/null || true
+
     # Wait for server to start
     echo -e "${YELLOW}⏳ Waiting for server to start...${NC}"
     sleep 5
-    
+
     if docker ps | grep -q training-server; then
         echo -e "${GREEN}✅ Training server started successfully${NC}"
     else

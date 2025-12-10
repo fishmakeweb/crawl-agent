@@ -6,13 +6,13 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 # Copy package files
-COPY package.json package-lock.json* ./
+COPY self-learning-agent/ui/package.json self-learning-agent/ui/package-lock.json* ./
 
 # Install dependencies
 RUN npm ci --silent
 
 # Copy source code
-COPY . .
+COPY self-learning-agent/ui/ .
 
 # Build the app
 RUN npm run build

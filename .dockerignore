@@ -1,0 +1,43 @@
+# Exclude symlink to prevent Docker COPY conflicts
+crawl4ai-agent
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.local
+
+# Test and documentation
+tests/
+*.md
+!README.md
+!CLAUDE.md
+
+# Git
+.git/
+.gitignore
+
+# UI development files
+ui/node_modules/
+ui/build/
+
+# Runtime generated directories
+knowledge_db/
+frozen_resources/
+
+# Logs
+*.log

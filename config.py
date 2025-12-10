@@ -39,7 +39,7 @@ class TrainingConfig:
 class GeminiConfig:
     """Gemini API configuration and optimization"""
     API_KEY: str
-    MODEL: str = "gemini-2.5-flash"  # Stable model for agentic tasks
+    MODEL: str = "gemini-2.0-flash"  # Stable model for agentic tasks
     EMBEDDING_MODEL: str = "models/text-embedding-004"
 
     # Multi-model routing
@@ -144,8 +144,8 @@ class ServiceConfig:
     PRODUCTION_SERVICE_PORT: int = 5014
     TRAINING_SERVICE_PORT: int = 5020
 
-    PRODUCTION_AGENT_ENDPOINT: str = "http://localhost:8000"
-    TRAINING_AGENT_ENDPOINT: str = "http://localhost:8001"
+    PRODUCTION_AGENT_ENDPOINT: str = "http://localhost:8004"
+    TRAINING_AGENT_ENDPOINT: str = "http://localhost:8091"
 
     TRAINING_UI_PORT: int = 3001
 
@@ -167,6 +167,8 @@ class Config:
         self.knowledge_store = KnowledgeStoreConfig(
             QDRANT_HOST=os.getenv("QDRANT_HOST", "localhost"),
             NEO4J_URI=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
+            NEO4J_USER=os.getenv("NEO4J_USER", "neo4j"),
+            NEO4J_PASSWORD=os.getenv("NEO4J_PASSWORD", "password"),
             REDIS_HOST=os.getenv("REDIS_HOST", "localhost")
         )
         self.service = ServiceConfig()

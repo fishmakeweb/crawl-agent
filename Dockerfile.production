@@ -11,17 +11,27 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
-COPY requirements.txt .
+COPY self-learning-agent/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Install Playwright browsers
+RUN playwright install chromium && \
+    playwright install-deps chromium
+
+# Copy crawl4ai-agent dependency
+COPY crawl4ai-agent /app/crawl4ai-agent
+
+# Set Python path to include crawl4ai-agent
+ENV PYTHONPATH="${PYTHONPATH}:/app/crawl4ai-agent"
+
+# Copy application code (selective to avoid symlink)
+COPY self-learning-agent/config.py self-learning-agent/gemini_client.py self-learning-agent/production_agent.py ./
+COPY self-learning-agent/agents/ ./agents/
+COPY self-learning-agent/algorithms/ ./algorithms/
+COPY self-learning-agent/knowledge/ ./knowledge/
 
 # Create frozen resources directory
 RUN mkdir -p /app/frozen_resources
-
-# Production agent entry point
-COPY production_agent.py .
 
 EXPOSE 8000
 

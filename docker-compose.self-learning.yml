@@ -1,0 +1,298 @@
+version: '3.8'
+
+services:
+  # ============================================================================
+  # AGENT SERVICES
+  # ============================================================================
+
+  # Production Agent (Frozen Resources)
+  agent-production:
+    build:
+      context: ..
+      dockerfile: self-learning-agent/Dockerfile.production
+    ports:
+      - "8004:8000"
+    environment:
+      - MODE=production
+      - FROZEN_RESOURCES_PATH=/app/frozen_resources_v10.json
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
+      - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
+      - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-crawl4ai-agent}
+    volumes:
+      - ./frozen_resources:/app/frozen_resources:ro
+      - ./crawl4ai-agent:/app/crawl4ai-agent:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - selflearning-network
+    restart: unless-stopped
+    command: python production_agent.py
+
+  # Training Agent (Learning Enabled)
+  agent-training:
+    build:
+      context: ..
+      dockerfile: self-learning-agent/Dockerfile.training
+    ports:
+      - "${TRAINING_AGENT_PORT:-8091}:8091"
+    environment:
+      - MODE=training
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LIGHTNING_STORE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/lightning_db
+      - UPDATE_FREQUENCY=${UPDATE_FREQUENCY:-5}
+      - QDRANT_HOST=qdrant
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - REDIS_HOST=redis-cache
+      - LOCAL_LLM_ENABLED=${LOCAL_LLM_ENABLED:-false}
+      - LOCAL_LLM_ENDPOINT=http://ollama:11434
+      - DB_MAX_RETRIES=${DB_MAX_RETRIES:-10}
+      - DB_RETRY_DELAY_SECONDS=${DB_RETRY_DELAY_SECONDS:-5}
+      - DB_CONNECTION_TIMEOUT_SECONDS=${DB_CONNECTION_TIMEOUT_SECONDS:-30}
+      - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
+      - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
+      - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-crawl4ai-agent-training}
+    volumes:
+      - knowledge_data:/app/knowledge_db
+      - ./crawl4ai-agent:/app/crawl4ai-agent:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started  # No healthcheck for Qdrant - minimal image
+      neo4j:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+    networks:
+      - selflearning-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "${AGENT_CPU_LIMIT:-2}"
+          memory: "${AGENT_MEMORY_LIMIT:-4G}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8091/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    command: python training_agent.py
+
+  # ============================================================================
+  # HYBRID KNOWLEDGE STORE INFRASTRUCTURE
+  # ============================================================================
+
+  # Vector Store (Qdrant)
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    networks:
+      - selflearning-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "${QDRANT_CPU_LIMIT:-1}"
+          memory: "${QDRANT_MEMORY_LIMIT:-2G}"
+    # Healthcheck disabled - Qdrant minimal image doesn't include curl/wget
+    # The training agent will handle connection retries gracefully
+    # healthcheck:
+    #   test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:6333/healthz || exit 1"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+    #   start_period: 10s
+
+  # Graph Store (Neo4j)
+  neo4j:
+    image: neo4j:5.15-community
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"  # HTTP
+      - "${NEO4J_PORT:-7687}:7687"  # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+      - NEO4J_dbms_memory_pagecache_size=512M
+      - NEO4J_dbms_memory_heap_initial__size=512M
+      - NEO4J_dbms_memory_heap_max__size=1G
+      - NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
+    networks:
+      - selflearning-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "${NEO4J_CPU_LIMIT:-1}"
+          memory: "${NEO4J_MEMORY_LIMIT:-2G}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Cache Layer (Redis)
+  redis-cache:
+    image: redis:7.2-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory ${REDIS_MEMORY_LIMIT:-512mb} --maxmemory-policy allkeys-lru
+    networks:
+      - selflearning-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ============================================================================
+  # DATABASE
+  # ============================================================================
+
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Optional: Add init script if needed
+      # - ../../scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+      - POSTGRES_MULTIPLE_DATABASES=lightning_db,training_db,crawler_db
+    networks:
+      - selflearning-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: "${POSTGRES_MEMORY_LIMIT:-1G}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ============================================================================
+  # OPTIONAL: LOCAL LLM (Cost Optimization)
+  # ============================================================================
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_MODELS=llama2,codellama
+    networks:
+      - selflearning-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - with-local-llm  # Only start with --profile with-local-llm
+
+  # ============================================================================
+  # MONITORING & OBSERVABILITY (Optional)
+  # ============================================================================
+
+  # Grafana for metrics visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Optional: Add custom dashboards/datasources if available
+      # - ../../monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      # - ../../monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    networks:
+      - selflearning-network
+    restart: unless-stopped
+    profiles:
+      - with-monitoring
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+      # Optional: Add custom prometheus config if available
+      # - ../../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - selflearning-network
+    restart: unless-stopped
+    profiles:
+      - with-monitoring
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+networks:
+  selflearning-network:
+    driver: bridge
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+volumes:
+  # Knowledge Store
+  qdrant_data:
+    driver: local
+  neo4j_data:
+    driver: local
+  neo4j_logs:
+    driver: local
+  redis_data:
+    driver: local
+  knowledge_data:
+    driver: local
+
+  # Database
+  postgres_data:
+    driver: local
+
+  # Optional
+  ollama_data:
+    driver: local
+  grafana_data:
+    driver: local
+  prometheus_data:
+    driver: local

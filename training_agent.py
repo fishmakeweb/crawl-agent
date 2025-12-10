@@ -10,6 +10,8 @@ from typing import Optional, Dict, Any, List
 import json
 import uuid
 import socketio
+import logging
+from datetime import datetime
 
 from config import Config
 from gemini_client import GeminiClient
@@ -18,8 +20,44 @@ from algorithms.self_improving_algorithm import SelfImprovingCrawlerAlgorithm
 from knowledge.hybrid_knowledge_store import HybridKnowledgeStore
 from knowledge.rl_controller import RLResourceController
 
+
+class SocketIOLogHandler(logging.Handler):
+    """Custom handler to emit logs via Socket.IO"""
+
+    def __init__(self, socketio_server):
+        super().__init__()
+        self.sio = socketio_server
+        self.job_id = None  # Set before each crawl
+
+    def emit(self, record):
+        """Emit log record via Socket.IO"""
+        try:
+            log_entry = {
+                'level': record.levelname,
+                'message': self.format(record),
+                'logger': record.name,
+                'timestamp': datetime.now().isoformat(),
+                'job_id': self.job_id
+            }
+
+            # Send asynchronously
+            asyncio.create_task(
+                self.sio.emit('crawl_log', log_entry)
+            )
+        except Exception:
+            self.handleError(record)
+
 # Initialize
 app = FastAPI(title="Training Crawler Agent", version="1.0.0")
+
+# CORS - Must be added BEFORE Socket.IO wrapping
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize Socket.IO server
 sio = socketio.AsyncServer(
@@ -29,15 +67,6 @@ sio = socketio.AsyncServer(
     engineio_logger=False
 )
 socket_app = socketio.ASGIApp(sio, app)
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Load config
 config = Config()
@@ -66,6 +95,16 @@ active_connections: List[WebSocket] = []
 job_queue = {}
 feedback_queue = {}
 
+# Configure logging for real-time streaming
+log_handler = SocketIOLogHandler(sio)
+log_handler.setLevel(logging.INFO)
+log_formatter = logging.Formatter('%(message)s')
+log_handler.setFormatter(log_formatter)
+
+# Attach to relevant loggers
+logging.getLogger('crawl4ai').addHandler(log_handler)
+logging.getLogger('crawl4ai_wrapper').addHandler(log_handler)
+
 print(f"🎓 Training Agent started on port 8091")
 print(f"   Update frequency: Every {config.training.UPDATE_FREQUENCY} rollouts")
 
@@ -86,6 +125,18 @@ async def disconnect(sid):
 async def ping(sid):
     """Handle ping from client"""
     await sio.emit('pong', room=sid)
+
+@sio.event
+async def subscribe_logs(sid, data):
+    """Client subscribes to logs for specific job"""
+    job_id = data.get('job_id')
+    print(f"📡 Client {sid} subscribed to logs for job {job_id}")
+
+@sio.event
+async def unsubscribe_logs(sid, data):
+    """Client unsubscribes from logs"""
+    job_id = data.get('job_id')
+    print(f"📡 Client {sid} unsubscribed from logs for job {job_id}")
 
 
 # Request models
@@ -118,6 +169,7 @@ async def health_check():
         "mode": "training",
         "update_cycle": algorithm.current_cycle,
         "pending_rollouts": len(algorithm.pending_rollouts),
+        "max_rollouts": algorithm.update_frequency,
         "gemini_stats": gemini_client.get_stats(),
         "knowledge_metrics": knowledge_store.get_metrics(),
         "rl_policy": rl_controller.get_policy_summary()
@@ -137,8 +189,21 @@ async def train_crawl(request: TrainCrawlRequest):
             "feedback_from_previous": request.feedback_from_previous
         }
 
+        # Set job_id context for logging
+        log_handler.job_id = job_id
+
+        # Emit crawl start event
+        await sio.emit('crawl_started', {
+            'job_id': job_id,
+            'url': request.url,
+            'description': request.user_description
+        })
+
         # Execute with current resources
         result = await agent.execute_crawl(task)
+
+        # Clear job_id context
+        log_handler.job_id = None
 
         # Debug logging
         print(f"📊 Crawl result keys: {result.keys()}")
@@ -158,11 +223,22 @@ async def train_crawl(request: TrainCrawlRequest):
             "awaiting_feedback": True
         }
 
+        # Track rollout in algorithm
+        algorithm.pending_rollouts.append(job_id)
+
+        # Emit Socket.IO update for pending rollouts
+        await sio.emit('pending_rollouts_updated', {
+            'pending_count': len(algorithm.pending_rollouts),
+            'update_frequency': algorithm.update_frequency,
+            'cycle': algorithm.current_cycle
+        })
+
         # Broadcast to WebSocket clients
         await broadcast_job_completed(job_id, result)
 
         response_data = result.get("data", [])
         print(f"📤 Returning {len(response_data)} items in HTTP response")
+        print(f"📊 Pending rollouts: {len(algorithm.pending_rollouts)}/{algorithm.update_frequency}")
 
         return CrawlResponse(
             job_id=job_id,
@@ -174,7 +250,47 @@ async def train_crawl(request: TrainCrawlRequest):
         )
 
     except Exception as e:
+        # Clear job_id context on error
+        log_handler.job_id = None
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def trigger_learning_update():
+    """Trigger learning cycle when N rollouts complete"""
+    print(f"\n{'='*60}")
+    print(f"🔄 Triggering learning update (cycle {algorithm.current_cycle})...")
+    print(f"{'='*60}")
+
+    # Collect rollout data from job_queue
+    rollout_data = []
+    for rollout_id in algorithm.pending_rollouts:
+        if rollout_id in job_queue:
+            job = job_queue[rollout_id]
+            rollout_data.append({
+                'id': rollout_id,
+                'task': job['task'],
+                'result': job['result'],
+                'reward': job['base_reward'],
+                'metadata': {'user_feedback': feedback_queue.get(rollout_id, {}).get('original')}
+            })
+
+    # Call algorithm's interactive learning method
+    new_resources = await algorithm.learn_from_interactive_rollouts(rollout_data)
+
+    # Update cycle and clear pending
+    algorithm.current_cycle += 1
+    algorithm.pending_rollouts = []
+    algorithm.feedback_queue = []
+
+    # Broadcast update complete
+    await sio.emit('learning_cycle_complete', {
+        'cycle': algorithm.current_cycle,
+        'resources_updated': True,
+        'performance_metrics': new_resources.get('performance_metrics', {})
+    })
+
+    print(f"✅ Learning update complete (cycle {algorithm.current_cycle})")
+    print(f"{'='*60}\n")
 
 
 @app.post("/feedback")
@@ -212,10 +328,30 @@ async def submit_feedback(request: FeedbackRequest):
             "timestamp": asyncio.get_event_loop().time()
         }
 
+        # Track feedback in algorithm
+        algorithm.feedback_queue.append({
+            'job_id': request.job_id,
+            'interpretation': interpretation,
+            'timestamp': datetime.now().isoformat()
+        })
+
         job_queue[request.job_id]["awaiting_feedback"] = False
+
+        # Emit Socket.IO update for pending rollouts
+        await sio.emit('pending_rollouts_updated', {
+            'pending_count': len(algorithm.pending_rollouts),
+            'update_frequency': algorithm.update_frequency,
+            'cycle': algorithm.current_cycle
+        })
 
         # Broadcast feedback received
         await broadcast_feedback_received(request.job_id, interpretation)
+
+        # Check if N-rollout threshold reached
+        print(f"📊 Feedback received. Pending rollouts: {len(algorithm.pending_rollouts)}/{algorithm.update_frequency}")
+        if len(algorithm.pending_rollouts) >= algorithm.update_frequency:
+            # Trigger learning cycle asynchronously
+            asyncio.create_task(trigger_learning_update())
 
         return {
             "status": "accepted",

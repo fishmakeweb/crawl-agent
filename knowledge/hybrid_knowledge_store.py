@@ -148,17 +148,24 @@ class HybridKnowledgeStore:
         # Vector store schema
         if self.vector_available:
             try:
-                # Create vector collection if not exists
-                self.vector_store.create_collection(
-                    collection_name=self.collection_name,
-                    vectors_config=VectorParams(
-                        size=self.config.VECTOR_DIMENSION,
-                        distance=Distance.COSINE
+                # Check if collection exists first
+                collections = self.vector_store.get_collections().collections
+                collection_exists = any(c.name == self.collection_name for c in collections)
+
+                if not collection_exists:
+                    # Create vector collection
+                    self.vector_store.create_collection(
+                        collection_name=self.collection_name,
+                        vectors_config=VectorParams(
+                            size=self.config.VECTOR_DIMENSION,
+                            distance=Distance.COSINE
+                        )
                     )
-                )
-                logger.info(f"✅ Created vector collection: {self.collection_name}")
+                    logger.info(f"✅ Created vector collection: {self.collection_name}")
+                else:
+                    logger.info(f"ℹ️  Vector collection already exists: {self.collection_name}")
             except Exception as e:
-                logger.info(f"ℹ️  Vector collection exists or creation skipped: {e}")
+                logger.warning(f"⚠️  Error initializing vector collection: {e}")
 
         # Graph store schema (only if available)
         if self.graph_available:
@@ -657,20 +664,19 @@ Return as JSON with structure:
             print(f"⚠️  Error fetching domain patterns: {e}")
             return {}
 
-    def add_patterns(self, patterns: List[Dict]):
-        """Batch add patterns (synchronous wrapper)"""
-        loop = asyncio.get_event_loop()
+    async def add_patterns(self, patterns: List[Dict]):
+        """Batch add patterns (async)"""
         for pattern in patterns:
-            loop.run_until_complete(self.store_pattern(pattern))
+            await self.store_pattern(pattern)
 
-    def add_failure_patterns(self, patterns: List[Dict]):
+    async def add_failure_patterns(self, patterns: List[Dict]):
         """Store patterns from failed attempts for learning"""
         for pattern in patterns:
             pattern["type"] = "failure"
             pattern["success_rate"] = 0.0
-            self.add_patterns([pattern])
+            await self.add_patterns([pattern])
 
-    def add_feedback_insights(self, insights: List[Dict]):
+    async def add_feedback_insights(self, insights: List[Dict]):
         """Store insights from user feedback"""
         for insight in insights:
             pattern = {
@@ -681,7 +687,7 @@ Return as JSON with structure:
                 "frequency": 1,
                 "success_rate": 0.5  # Neutral until validated
             }
-            self.add_patterns([pattern])
+            await self.add_patterns([pattern])
 
     def close(self):
         """Cleanup connections"""
