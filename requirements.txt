@@ -45,3 +45,6 @@ pandas>=2.0.0
 
 # Environment
 python-dotenv>=1.0.0
+
+# Kafka
+confluent-kafka>=2.3.0

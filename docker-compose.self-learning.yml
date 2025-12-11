@@ -15,7 +15,16 @@ services:
     environment:
       - MODE=production
       - FROZEN_RESOURCES_PATH=/app/frozen_resources_v10.json
+      # LLM Provider Configuration
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash}
+      - EXTERNAL_LLM_BASE_URL=${EXTERNAL_LLM_BASE_URL}
+      - EXTERNAL_LLM_API_KEY=${EXTERNAL_LLM_API_KEY}
+      - EXTERNAL_LLM_MODEL_NAME=${EXTERNAL_LLM_MODEL_NAME}
+      - EXTERNAL_EMBEDDING_MODEL=${EXTERNAL_EMBEDDING_MODEL}
+      - EXTERNAL_EMBEDDING_DIMENSION=${EXTERNAL_EMBEDDING_DIMENSION}
+      # Kafka Configuration
       - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
       - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
       - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-crawl4ai-agent}

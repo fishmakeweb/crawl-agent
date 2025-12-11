@@ -3,16 +3,26 @@ Production Agent Entry Point
 Serves frozen resources with optimized performance
 """
 import asyncio
-from fastapi import FastAPI, HTTPException
+import sys
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import json
 import os
+import logging
 
 from config import Config
-from gemini_client import GeminiClient
+from gemini_client import GeminiClient  # Now supports multiple providers
 from agents.shared_crawler_agent import SharedCrawlerAgent
+
+# Add crawl4ai-agent to path for Kafka publisher
+sys.path.append(os.path.join(os.path.dirname(__file__), '../crawl4ai-agent'))
+from kafka_publisher import Crawl4AIKafkaPublisher
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Initialize
 app = FastAPI(title="Production Crawler Agent", version="1.0.0")
@@ -31,8 +41,13 @@ config = Config()
 config.MODE = "production"
 config.validate()
 
-# Initialize Gemini client
-gemini_client = GeminiClient(config.gemini)
+# Initialize LLM client (supports Gemini and external providers)
+llm_client = GeminiClient(config.llm)
+gemini_client = llm_client  # Keep backward compatibility alias
+
+# Initialize Kafka publisher for real-time progress events
+kafka_publisher = Crawl4AIKafkaPublisher()
+logger.info(f"Kafka publisher initialized (enabled={kafka_publisher.enabled})")
 
 # Load frozen resources
 frozen_resources = {}
@@ -58,25 +73,60 @@ print(f"🚀 Production Agent started on port 8000")
 # Request models
 class CrawlRequest(BaseModel):
     url: str
-    user_description: Optional[str] = None
-    prompt: Optional[str] = None  # Added for compatibility with .NET client
+    prompt: str  # Renamed from user_description for consistency with agent_server
+    user_description: Optional[str] = None  # Kept for backward compatibility
     extraction_schema: Optional[Dict[str, Any]] = None
+    extract_schema: Optional[Dict[str, Any]] = None  # Alias
     job_id: Optional[str] = None
     user_id: Optional[str] = None
+    navigation_steps: Optional[List[Dict[str, Any]]] = None
+    max_pages: int = 50
+
+
+class EmbeddingData(BaseModel):
+    """Pre-generated embedding data to eliminate separate .NET API call"""
+    embedding_text: str
+    embedding_vector: List[float]
+    schema_type: str  # "product_list", "article", "generic_data"
+    quality_score: float  # 0.0 - 1.0
+
+
+class NavigationResult(BaseModel):
+    """Result of navigation execution"""
+    final_url: str
+    executed_steps: List[Dict[str, Any]]
+    pages_collected: int
 
 
 class CrawlResponse(BaseModel):
+    """Response from crawl operation - OPTIMIZED with pre-generated embeddings"""
     success: bool
-    data: list
-    metadata: Dict[str, Any]
+    data: List[Dict[str, Any]]
+    navigation_result: Optional[NavigationResult] = None
+    execution_time_ms: float
+    conversation_name: str  # NEW: Pre-generated conversation name
+    embedding_data: Optional[EmbeddingData] = None  # NEW: Pre-generated embedding
+    metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 
-
-
 class QueryRequest(BaseModel):
+    """Request for RAG query"""
     context: str
     query: str
+
+
+class SummaryRequest(BaseModel):
+    job_id: Optional[str] = None
+    data: Any
+    source: str = "manual"
+    prompt: Optional[str] = None
+
+
+class EmbeddingRequest(BaseModel):
+    """Request for generating vector embeddings"""
+    text: str
+    model: Optional[str] = "models/embedding-001"
 
 
 @app.get("/health")
@@ -85,206 +135,85 @@ async def health_check():
     return {
         "status": "healthy",
         "mode": "production",
+        "llm_provider": config.llm.PROVIDER.value,
+        "embedding_dimension": llm_client.adapter.default_embedding_dimension,
         "resources_version": frozen_resources.get("version", 0),
-        "gemini_stats": gemini_client.get_stats()
+        "llm_stats": gemini_client.get_stats()
     }
-
-
-@app.post("/query")
-async def query_data(request: QueryRequest):
-    """RAG Endpoint: Answer questions based on provided context"""
-    try:
-        if not request.context:
-            return {"answer": "No context provided to answer the question."}
-            
-        # Direct RAG implementation using gemini_client for better control
-        prompt = f"""
-You are a helpful data assistant. Answer the user's question based ONLY on the provided context data.
-
-CONTEXT DATA (JSON/Text):
-{request.context[:100000]}
-
-USER QUESTION: "{request.query}"
-
-INSTRUCTIONS:
-1. Analyze the context data to find the answer.
-2. If the answer is found, provide a clear, concise summary.
-3. If the answer is NOT in the context, say "I cannot find that information in the crawled data."
-4. Do not hallucinate information not present in the context.
-
-Answer:
-"""
-        # Use gemini_client directly
-        answer = await gemini_client.generate(prompt)
-        return {"answer": answer}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
-
-
-
-class SummaryRequest(BaseModel):
-    job_id: str
-    data: list
-    source: Optional[str] = "manual"
-
-@app.post("/summary")
-async def generate_summary(request: SummaryRequest):
-    """Generate summary and charts for crawled data"""
-    try:
-        if not request.data:
-            return {"summary": "No data available to summarize.", "charts": []}
-
-        # 1. Generate Text Summary
-        data_sample = request.data[:50] # Limit sample size
-        data_json = json.dumps(data_sample, indent=2)
-        
-        prompt = f"""
-You are a Data Analyst. Summarize the following dataset.
-
-DATA SAMPLE ({len(request.data)} total records):
-{data_json}
-
-TASK:
-1. Provide a concise summary of what this data represents (e.g., "List of 32 products from Nintendo Wii U category").
-2. Highlight 3 key insights (e.g., "Price range is $10-$50", "Most common brand is Nintendo").
-3. Mention data quality (e.g., "All records have prices", "Some descriptions are missing").
-
-OUTPUT FORMAT (JSON):
-{{
-    "summaryText": "Concise summary here...",
-    "insightHighlights": ["Insight 1", "Insight 2", "Insight 3"],
-    "fieldCoverage": [
-        {{"fieldName": "price", "coveragePercent": 100}},
-        {{"fieldName": "brand", "coveragePercent": 80}}
-    ]
-}}
-"""
-        response_text = await gemini_client.generate(prompt)
-        
-        # Parse JSON response
-        try:
-            # Extract JSON if wrapped in markdown
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
-                
-            summary_data = json.loads(response_text)
-        except:
-            # Fallback if JSON parsing fails
-            summary_data = {
-                "summaryText": response_text,
-                "insightHighlights": [],
-                "fieldCoverage": []
-            }
-
-        # 2. Generate Charts (Python Logic)
-        charts = []
-        if request.data:
-            keys = request.data[0].keys()
-            
-            # Helper to clean currency
-            def clean_price(val):
-                if isinstance(val, (int, float)): return val
-                if not isinstance(val, str): return 0
-                clean = val.replace('$', '').replace('€', '').replace(',', '').strip()
-                try:
-                    return float(clean)
-                except:
-                    return 0
-
-            # A. Price Histogram
-            price_keys = [k for k in keys if 'price' in k.lower() or 'cost' in k.lower()]
-            if price_keys:
-                pk = price_keys[0]
-                prices = [clean_price(d.get(pk)) for d in request.data if d.get(pk)]
-                if prices:
-                    # Simple binning
-                    min_p, max_p = min(prices), max(prices)
-                    if min_p != max_p:
-                        charts.append({
-                            "title": f"Price Distribution ({pk})",
-                            "chartType": "bar",
-                            "chartData": {
-                                "labels": ["Low", "Medium", "High"], # Simplified for now
-                                "datasets": [{
-                                    "label": "Count",
-                                    "data": [
-                                        len([p for p in prices if p < min_p + (max_p-min_p)*0.33]),
-                                        len([p for p in prices if p >= min_p + (max_p-min_p)*0.33 and p < min_p + (max_p-min_p)*0.66]),
-                                        len([p for p in prices if p >= min_p + (max_p-min_p)*0.66])
-                                    ]
-                                }]
-                            }
-                        })
-
-            # B. Categorical Top 10
-            cat_keys = [k for k in keys if k not in price_keys and 'url' not in k.lower() and 'image' not in k.lower() and 'desc' not in k.lower()]
-            for ck in cat_keys:
-                values = [str(d.get(ck)) for d in request.data if d.get(ck)]
-                counts = {}
-                for v in values:
-                    counts[v] = counts.get(v, 0) + 1
-                
-                # If cardinality is good (2-20)
-                if 1 < len(counts) < 20:
-                    sorted_counts = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
-                    charts.append({
-                        "title": f"Top {ck}",
-                        "chartType": "doughnut" if len(counts) < 5 else "bar",
-                        "chartData": {
-                            "labels": [x[0] for x in sorted_counts],
-                            "datasets": [{
-                                "label": "Count",
-                                "data": [x[1] for x in sorted_counts]
-                            }]
-                        }
-                    })
-                    if len(charts) >= 3: break # Limit to 3 charts
-
-        return {
-            "summaryText": summary_data.get("summaryText", ""),
-            "insightHighlights": summary_data.get("insightHighlights", []),
-            "fieldCoverage": summary_data.get("fieldCoverage", []),
-            "chartPreviews": charts
-        }
-
-    except Exception as e:
-        print(f"❌ Summary generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/crawl", response_model=CrawlResponse)
 async def crawl(request: CrawlRequest):
-    """Execute production crawl with frozen resources"""
+    """Execute production crawl with frozen resources and Kafka events"""
     try:
-        # Handle prompt/user_description compatibility
-        description = request.user_description or request.prompt
-        if not description:
-             # Fallback if both are missing, though usually prompt is sent
-             description = "Extract main content"
-             print("⚠️ Warning: No prompt or user_description provided. Using default.")
-
+        # Support both 'prompt' and 'user_description' fields
+        prompt = request.prompt or request.user_description or ""
+        extract_schema = request.extract_schema or request.extraction_schema or {}
+        
         task = {
             "url": request.url,
-            "user_description": description,
-            "extraction_schema": request.extraction_schema or {}
+            "prompt": prompt,
+            "user_description": prompt,  # For backward compatibility
+            "extraction_schema": extract_schema,
+            "job_id": request.job_id,
+            "user_id": request.user_id,
+            "navigation_steps": request.navigation_steps,
+            "max_pages": request.max_pages
         }
 
-        # Execute with frozen resources
-        result = await agent.execute_crawl(task, resources=frozen_resources)
+        # Execute with frozen resources and Kafka publisher
+        result = await agent.execute_crawl(
+            task, 
+            resources=frozen_resources,
+            kafka_publisher=kafka_publisher
+        )
 
-        return CrawlResponse(
+        # Extract embedding data from result (pre-generated by intelligent_crawl)
+        embedding_data = result.get("embedding_data")
+        embedding_data_model = None
+        if embedding_data:
+            embedding_data_model = EmbeddingData(
+                embedding_text=embedding_data.get("embedding_text", ""),
+                embedding_vector=embedding_data.get("embedding_vector", []),
+                schema_type=embedding_data.get("schema_type", "generic_data"),
+                quality_score=embedding_data.get("quality_score", 0.5)
+            )
+
+        # Extract navigation result
+        nav_result = result.get("navigation_result")
+        nav_result_model = None
+        if nav_result:
+            nav_result_model = NavigationResult(
+                final_url=nav_result.get("final_url", request.url),
+                executed_steps=nav_result.get("executed_steps", []),
+                pages_collected=nav_result.get("pages_collected", 1)
+            )
+
+        response = CrawlResponse(
             success=result["success"],
             data=result.get("data", []),
+            navigation_result=nav_result_model,
+            execution_time_ms=result.get("execution_time_ms", 0.0),
+            conversation_name=result.get("conversation_name", "Data Collection"),
+            embedding_data=embedding_data_model,
             metadata=result.get("metadata", {}),
             error=result.get("error")
         )
+        
+        # Debug: Log the ACTUAL JSON that will be sent to C#
+        response_dict = response.dict()
+        logger.info("=" * 80)
+        logger.info("📤 JSON BEING SENT TO C#:")
+        logger.info(f"   conversation_name: '{response_dict.get('conversation_name')}'")
+        logger.info(f"   success: {response_dict.get('success')}")
+        logger.info(f"   data: {len(response_dict.get('data', []))} items")
+        logger.info(f"   First 200 chars of JSON: {json.dumps(response_dict)[:200]}")
+        logger.info("=" * 80)
+        
+        return response
+
     except Exception as e:
+        logger.error(f"Crawl failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -300,6 +229,97 @@ async def get_stats():
     }
 
 
+@app.post("/query")
+async def answer_query(request: QueryRequest):
+    """Answer a question based on provided context (RAG)"""
+    try:
+        # Use agent's base crawler for query answering
+        answer = await agent.base_crawler.answer_query(request.context, request.query)
+        return {"answer": answer}
+    except Exception as e:
+        logger.error(f"Query failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/summary")
+async def generate_summary_endpoint(request: SummaryRequest):
+    """Generate summary and chart recommendations based on data"""
+    try:
+        result = await agent.base_crawler.generate_summary(request.data, request.prompt)
+        return result
+    except Exception as e:
+        logger.error(f"Summary generation failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/embedding")
+async def generate_embedding(request: EmbeddingRequest):
+    """
+    Generate vector embedding for text using configured LLM provider.
+    Returns embedding vector (dimension varies by provider: Gemini=768, OpenAI=1536)
+    """
+    try:
+        # Truncate text if too long
+        text = request.text[:10000] if len(request.text) > 10000 else request.text
+        
+        # Use LLM client's embed method (provider-agnostic)
+        embedding = await llm_client.embed(text)
+        
+        logger.info(f"Generated embedding with {len(embedding)} dimensions using {config.llm.PROVIDER.value}")
+        
+        return {
+            "success": True,
+            "embedding": embedding,
+            "dimensions": len(embedding),
+            "model": request.model,
+            "provider": config.llm.PROVIDER.value
+        }
+        
+    except Exception as e:
+        logger.error(f"Embedding generation failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "service": "Production Crawler Agent",
+        "version": "1.0.0",
+        "mode": "production",
+        "status": "running",
+        "resources_version": frozen_resources.get("version", 0),
+        "endpoints": {
+            "health": "/health",
+            "crawl": "/crawl (POST)",
+            "query": "/query (POST)",
+            "summary": "/summary (POST)",
+            "embedding": "/embedding (POST)",
+            "stats": "/stats (GET)"
+        }
+    }
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Gracefully close Kafka publisher on shutdown"""
+    logger.info("Shutting down production agent...")
+    if kafka_publisher:
+        kafka_publisher.close()
+        logger.info("Kafka publisher closed")
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    
+    # Configure logging to suppress health check spam
+    log_config = uvicorn.config.LOGGING_CONFIG
+    log_config["loggers"]["uvicorn.access"]["level"] = "WARNING"
+    
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_config=log_config,
+        access_log=True
+    )

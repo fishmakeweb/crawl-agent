@@ -1,7 +1,12 @@
 """
 Cost-optimized Gemini Client with caching, batching, and local LLM fallback
+Now supports multiple LLM providers via adapter pattern
 """
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
 from cachetools import TTLCache
 import asyncio
 from typing import List, Optional, Dict, Any
@@ -10,7 +15,8 @@ import json
 import aiohttp
 from datetime import datetime, timedelta
 from collections import deque
-from config import GeminiConfig
+from config import LLMConfig, LLMProvider
+from llm_adapters import create_adapter, LLMAdapter
 
 
 class AsyncBatcher:
@@ -117,13 +123,21 @@ class GeminiClient:
     - Fallback to local LLM (large/repeated tasks)
     """
 
-    def __init__(self, config: GeminiConfig):
+    def __init__(self, config: LLMConfig):
         self.config = config
-        genai.configure(api_key=config.API_KEY)
-
-        # Use Gemini 2.0 Flash for cost efficiency
-        self.model = genai.GenerativeModel(config.MODEL)
-        self.embedding_model = config.EMBEDDING_MODEL
+        self.provider = config.PROVIDER
+        
+        # Initialize adapter for multi-provider support
+        self.adapter: LLMAdapter = create_adapter(config.get_adapter_config())
+        
+        # Legacy Gemini-specific initialization (only if using Gemini)
+        if self.provider == LLMProvider.GEMINI and genai:
+            genai.configure(api_key=config.API_KEY)
+            self.model = genai.GenerativeModel(config.MODEL)
+            self.embedding_model = config.EMBEDDING_MODEL
+        else:
+            self.model = None
+            self.embedding_model = None
 
         # Cache layer (1 hour TTL by default)
         self.cache = TTLCache(
@@ -131,20 +145,20 @@ class GeminiClient:
             ttl=config.CACHE_TTL_SECONDS
         ) if config.CACHE_ENABLED else {}
 
-        # Batching layer
+        # Batching layer (only for Gemini - requires direct model access)
         self.batcher = AsyncBatcher(
             max_batch=config.MAX_BATCH_SIZE,
             timeout=config.BATCH_TIMEOUT_SECONDS,
             gemini_model=self.model
-        ) if config.BATCHING_ENABLED else None
+        ) if config.BATCHING_ENABLED and self.provider == LLMProvider.GEMINI else None
 
         # Local LLM fallback (optional)
         self.local_llm_endpoint = config.LOCAL_LLM_ENDPOINT if config.LOCAL_LLM_ENABLED else None
         self.local_llm_threshold = config.LOCAL_LLM_THRESHOLD_CHARS
 
-        # Multi-model routing setup
+        # Multi-model routing setup (only for Gemini)
         self.models = {}
-        if config.ROUTING_ENABLED and hasattr(config, 'MODELS') and config.MODELS:
+        if self.provider == LLMProvider.GEMINI and config.ROUTING_ENABLED and hasattr(config, 'MODELS') and config.MODELS and genai:
             for model_id, model_config in config.MODELS.items():
                 self.models[model_id] = {
                     "instance": genai.GenerativeModel(model_id),
@@ -258,40 +272,29 @@ class GeminiClient:
             return None
 
     async def _call_gemini(self, prompt: str, **kwargs) -> str:
-        """Direct Gemini API call"""
+        """LLM API call via adapter (supports multiple providers)"""
         try:
-            # Handle response_mime_type parameter - needs to be in generation_config
-            if 'response_mime_type' in kwargs:
-                generation_config = genai.GenerationConfig(
-                    response_mime_type=kwargs.pop('response_mime_type')
-                )
-                response = await self.model.generate_content_async(
-                    prompt,
-                    generation_config=generation_config,
-                    **kwargs
-                )
-            else:
-                response = await self.model.generate_content_async(prompt, **kwargs)
+            # Use adapter for multi-provider support
+            response = await self.adapter.generate_text_async(
+                prompt=prompt,
+                **kwargs
+            )
             return response.text
         except Exception as e:
-            print(f"❌ Gemini API error: {e}")
+            print(f"❌ LLM API error ({self.provider.value}): {e}")
             raise
 
     async def embed(self, text: str) -> List[float]:
-        """Generate embeddings (cached)"""
+        """Generate embeddings (cached) via adapter"""
         cache_key = f"embed:{hashlib.sha256(text.encode()).hexdigest()}"
 
         if self.config.CACHE_ENABLED and cache_key in self.cache:
             self.stats["cache_hits"] += 1
             return self.cache[cache_key]
 
-        result = await genai.embed_content_async(
-            model=self.embedding_model,
-            content=text,
-            task_type="retrieval_document"
-        )
-
-        embedding = result['embedding']
+        # Use adapter for multi-provider embedding support
+        result = await self.adapter.generate_embedding_async(text=text)
+        embedding = result.embedding  # Access as attribute, not dict
 
         if self.config.CACHE_ENABLED:
             self.cache[cache_key] = embedding

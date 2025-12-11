@@ -9,15 +9,13 @@ import sys
 import os
 import json
 import asyncio
+import logging
 from datetime import datetime
 
-# Add crawl4ai-agent to path (container-aware)
-if os.path.exists('/app/crawl4ai-agent'):
-    # Docker container path
-    sys.path.append('/app/crawl4ai-agent')
-else:
-    # Local development path
-    sys.path.append(os.path.join(os.path.dirname(__file__), '../../crawl4ai-agent'))
+logger = logging.getLogger(__name__)
+
+# Add crawl4ai-agent to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '../../crawl4ai-agent'))
 
 try:
     from agentlightning import LitAgent, NamedResources, Rollout
@@ -63,13 +61,8 @@ class SharedCrawlerAgent(_BaseAgent):
     def __init__(self, gemini_client, mode: str = "production"):
         self.gemini_client = gemini_client
         self.mode = mode  # "production" or "training"
-        # TEST_MARKER_2025_11_18: Pass GeminiClient to crawler for cost optimization and fallback handling
         self.base_crawler = Crawl4AIWrapper(gemini_client=gemini_client)
         print(f"🤖 Shared Crawler Agent initialized in {mode.upper()} mode")
-
-    async def answer_query(self, context: str, query: str) -> str:
-        """Delegate RAG query to base crawler"""
-        return await self.base_crawler.answer_query(context, query)
 
     def rollout(self, task: Dict[str, Any], resources: NamedResources,
                 rollout: Rollout) -> float:
@@ -259,35 +252,57 @@ Return only the number (0.0-1.0).
 
     # Standalone execution methods (non-Agent Lightning)
     async def execute_crawl(self, task: Dict[str, Any],
-                           resources: Optional[Dict] = None) -> Dict[str, Any]:
+                           resources: Optional[Dict] = None,
+                           kafka_publisher=None) -> Dict[str, Any]:
         """
         Standalone execution method (without Agent Lightning).
         Used for testing or direct invocation.
+        Supports Kafka real-time progress events.
         """
 
         if resources is None:
             resources = self._get_default_resources()
 
         try:
+            # Use 'prompt' field (preferred) or fall back to 'user_description'
+            prompt = task.get("prompt") or task.get("user_description", "")
+            
             result = await self.base_crawler.intelligent_crawl(
                 url=task["url"],
-                prompt=task.get("user_description", ""),
+                prompt=prompt,
+                job_id=task.get("job_id"),
+                user_id=task.get("user_id"),
+                navigation_steps=task.get("navigation_steps"),
                 extract_schema=task.get("extraction_schema", {}),
                 max_pages=resources.get("crawl_config", {}).get("max_pages", 50)
             )
 
-            # Debug logging
-            print(f"🔍 intelligent_crawl returned keys: {result.keys()}")
-            print(f"🔍 'data' key exists: {'data' in result}")
-            print(f"🔍 'data' value type: {type(result.get('data'))}")
-            print(f"🔍 'data' length: {len(result.get('data', []))}")
-            
+            # Log what will be returned to C# service
             extracted_data = result.get("data", [])
-            print(f"🔍 Extracted data count: {len(extracted_data)}")
+            embedding_data = result.get("embedding_data")
+            conversation_name = result.get("conversation_name", "Data Collection")
+            
+            logger.info("=" * 80)
+            logger.info("📤 RESPONSE TO .NET SERVICE:")
+            logger.info(f"   ✓ success: {result.get('success', False)}")
+            logger.info(f"   ✓ conversation_name: '{conversation_name}'")
+            logger.info(f"   ✓ data: {len(extracted_data)} items")
+            if embedding_data:
+                emb_vector = embedding_data.get('embedding_vector', [])
+                emb_dims = len(emb_vector) if isinstance(emb_vector, list) else 0
+                logger.info(f"   ✓ embedding: {emb_dims}-dim, quality={embedding_data.get('quality_score', 0):.2f}")
+            else:
+                logger.info("   ✓ embedding: None")
+            logger.info(f"   ✓ execution_time: {result.get('execution_time_ms', 0)}ms")
+            logger.info("=" * 80)
 
             return {
                 "success": result.get("success", False),
                 "data": extracted_data,
+                "navigation_result": result.get("navigation_result", {}),
+                "execution_time_ms": result.get("execution_time_ms", 0),
+                "conversation_name": result.get("conversation_name", "Data Collection"),
+                "embedding_data": embedding_data,  # NEW: Pre-generated embeddings
                 "metadata": {
                     "execution_time_ms": result.get("execution_time_ms", 0),
                     "pages_collected": result.get("navigation_result", {}).get("pages_collected", 0),

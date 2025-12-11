@@ -25,7 +25,7 @@ COPY crawl4ai-agent /app/crawl4ai-agent
 ENV PYTHONPATH="${PYTHONPATH}:/app/crawl4ai-agent"
 
 # Copy application code (selective to avoid symlink)
-COPY self-learning-agent/config.py self-learning-agent/gemini_client.py self-learning-agent/production_agent.py ./
+COPY self-learning-agent/config.py self-learning-agent/gemini_client.py self-learning-agent/llm_adapters.py self-learning-agent/production_agent.py ./
 COPY self-learning-agent/agents/ ./agents/
 COPY self-learning-agent/algorithms/ ./algorithms/
 COPY self-learning-agent/knowledge/ ./knowledge/

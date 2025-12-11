@@ -13,6 +13,16 @@ class AgentMode(Enum):
     PRODUCTION = "production"  # Fixed resources, optimized
 
 
+class LLMProvider(Enum):
+    """Supported LLM providers"""
+    GEMINI = "gemini"  # Google Gemini (default)
+    OPENAI = "openai"  # OpenAI GPT models
+    AZURE = "azure"  # Azure OpenAI
+    TOGETHER = "together"  # Together AI
+    GROQ = "groq"  # Groq (fast inference)
+    CUSTOM = "custom"  # Custom OpenAI-compatible API
+
+
 @dataclass
 class TrainingConfig:
     """Training-specific configuration"""
@@ -36,13 +46,29 @@ class TrainingConfig:
 
 
 @dataclass
-class GeminiConfig:
-    """Gemini API configuration and optimization"""
-    API_KEY: str
-    MODEL: str = "gemini-2.0-flash"  # Stable model for agentic tasks
-    EMBEDDING_MODEL: str = "models/text-embedding-004"
+class LLMConfig:
+    """LLM provider configuration (Gemini or external)"""
+    # Provider selection
+    PROVIDER: LLMProvider = LLMProvider.GEMINI
+    
+    # Gemini-specific config
+    API_KEY: str = ""  # Gemini API key
+    MODEL: str = "gemini-2.0-flash-exp"  # Gemini model name
+    EMBEDDING_MODEL: str = "models/embedding-001"  # Gemini embedding model
 
-    # Multi-model routing
+    # External provider config (OpenAI-compatible APIs)
+    EXTERNAL_BASE_URL: Optional[str] = None  # e.g., https://one.keyai.shop/v1
+    EXTERNAL_API_KEY: Optional[str] = None  # External API key
+    EXTERNAL_MODEL_NAME: Optional[str] = None  # e.g., gpt-4o-mini
+    EXTERNAL_EMBEDDING_MODEL: Optional[str] = None  # e.g., text-embedding-3-small
+    EXTERNAL_EMBEDDING_DIMENSION: int = 1536  # OpenAI default: 1536, Gemini: 768
+    
+    # General LLM settings
+    TEMPERATURE: float = 0.7
+    MAX_TOKENS: int = 8000
+    TIMEOUT: float = 120.0
+
+    # Multi-model routing (Gemini only)
     ROUTING_ENABLED: bool = True
     
     # Rate limits (free tier defaults, upgrade for paid)
@@ -70,6 +96,31 @@ class GeminiConfig:
     
     # Model definitions with costs and limits
     MODELS: dict = None
+    
+    def get_adapter_config(self) -> dict:
+        """Get configuration for LLM adapter"""
+        if self.PROVIDER == LLMProvider.GEMINI:
+            return {
+                "provider": "gemini",
+                "api_key": self.API_KEY,
+                "model_name": self.MODEL,
+                "embedding_model": self.EMBEDDING_MODEL,
+                "temperature": self.TEMPERATURE,
+                "max_tokens": self.MAX_TOKENS
+            }
+        else:
+            # External OpenAI-compatible provider
+            return {
+                "provider": self.PROVIDER.value,
+                "base_url": self.EXTERNAL_BASE_URL,
+                "api_key": self.EXTERNAL_API_KEY,
+                "model_name": self.EXTERNAL_MODEL_NAME or "gpt-4o-mini",
+                "embedding_model": self.EXTERNAL_EMBEDDING_MODEL or "text-embedding-3-small",
+                "embedding_dimension": self.EXTERNAL_EMBEDDING_DIMENSION,
+                "temperature": self.TEMPERATURE,
+                "max_tokens": self.MAX_TOKENS,
+                "timeout": self.TIMEOUT
+            }
     
     def __post_init__(self):
         """Initialize model definitions if not provided"""
@@ -159,11 +210,33 @@ class Config:
 
         # Initialize sub-configs
         self.training = TrainingConfig()
-        self.gemini = GeminiConfig(
+        
+        # Determine LLM provider
+        provider_str = os.getenv("LLM_PROVIDER", "gemini").lower()
+        try:
+            provider = LLMProvider(provider_str)
+        except ValueError:
+            provider = LLMProvider.GEMINI
+        
+        # Initialize LLM config
+        self.llm = LLMConfig(
+            PROVIDER=provider,
             API_KEY=os.getenv("GEMINI_API_KEY", ""),
+            MODEL=os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp"),
+            EMBEDDING_MODEL=os.getenv("GEMINI_EMBEDDING_MODEL", "models/embedding-001"),
+            EXTERNAL_BASE_URL=os.getenv("EXTERNAL_LLM_BASE_URL"),
+            EXTERNAL_API_KEY=os.getenv("EXTERNAL_LLM_API_KEY"),
+            EXTERNAL_MODEL_NAME=os.getenv("EXTERNAL_LLM_MODEL_NAME"),
+            EXTERNAL_EMBEDDING_MODEL=os.getenv("EXTERNAL_EMBEDDING_MODEL"),
+            EXTERNAL_EMBEDDING_DIMENSION=int(os.getenv("EXTERNAL_EMBEDDING_DIMENSION", "1536")),
+            TEMPERATURE=float(os.getenv("LLM_TEMPERATURE", "0.7")),
+            MAX_TOKENS=int(os.getenv("LLM_MAX_TOKENS", "8000")),
             LOCAL_LLM_ENABLED=os.getenv("LOCAL_LLM_ENABLED", "false").lower() == "true",
             LOCAL_LLM_ENDPOINT=os.getenv("LOCAL_LLM_ENDPOINT")
         )
+        
+        # Keep backward compatibility alias
+        self.gemini = self.llm
         self.knowledge_store = KnowledgeStoreConfig(
             QDRANT_HOST=os.getenv("QDRANT_HOST", "localhost"),
             NEO4J_URI=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
@@ -193,8 +266,16 @@ class Config:
 
     def validate(self):
         """Validate configuration"""
-        if not self.gemini.API_KEY:
-            raise ValueError("GEMINI_API_KEY is required")
+        # Validate LLM config based on provider
+        if self.llm.PROVIDER == LLMProvider.GEMINI:
+            if not self.llm.API_KEY:
+                raise ValueError("GEMINI_API_KEY is required when LLM_PROVIDER=gemini")
+        else:
+            # External provider validation
+            if not self.llm.EXTERNAL_BASE_URL:
+                raise ValueError(f"EXTERNAL_LLM_BASE_URL is required when LLM_PROVIDER={self.llm.PROVIDER.value}")
+            if not self.llm.EXTERNAL_API_KEY:
+                raise ValueError(f"EXTERNAL_LLM_API_KEY is required when LLM_PROVIDER={self.llm.PROVIDER.value}")
 
         if self.is_production_mode() and not os.path.exists(self.frozen_resources_path):
             raise ValueError(f"Frozen resources not found: {self.frozen_resources_path}")
