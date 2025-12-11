@@ -1209,13 +1209,19 @@ Return ONLY the JSON array:
         try:
             if "```json" in response_text:
                 json_str = response_text.split("```json")[1].split("```")[0].strip()
+                logger.info(f"Strategy 2: Extracted JSON string length: {len(json_str)} chars")
                 items = json.loads(json_str)
                 if isinstance(items, list):
+                    logger.info(f"Strategy 2: Successfully parsed {len(items)} items")
                     return items
                 elif isinstance(items, dict):
+                    logger.info("Strategy 2: Parsed single dict, wrapping in list")
                     return [items]
-        except (IndexError, json.JSONDecodeError):
-            pass
+        except IndexError as e:
+            logger.warning(f"Strategy 2: IndexError - {str(e)}")
+        except json.JSONDecodeError as e:
+            logger.warning(f"Strategy 2: JSONDecodeError at line {e.lineno}, col {e.colno}: {e.msg}")
+            logger.warning(f"Strategy 2: Problematic JSON snippet: {json_str[max(0, e.pos-100):e.pos+100]}")
 
     # Strategy 3: Extract from ``` code block
         try:
@@ -1250,6 +1256,44 @@ Return ONLY the JSON array:
                     return items
         except (json.JSONDecodeError, AttributeError):
             pass
+
+        # Strategy 5: Extract complete objects from incomplete/truncated JSON
+        try:
+            import re
+            # Extract JSON content from code blocks if present
+            json_content = response_text
+            if "```json" in response_text:
+                try:
+                    json_content = response_text.split("```json")[1].split("```")[0].strip()
+                except IndexError:
+                    # Truncated before closing ```
+                    json_content = response_text.split("```json")[1] if "```json" in response_text else response_text
+            elif "```" in response_text:
+                try:
+                    json_content = response_text.split("```")[1].split("```")[0].strip()
+                except IndexError:
+                    json_content = response_text.split("```")[1] if len(response_text.split("```")) > 1 else response_text
+            
+            # Find all complete JSON objects (with matching opening and closing braces)
+            # This regex matches complete objects even if the array is incomplete
+            object_pattern = r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}'
+            matches = re.findall(object_pattern, json_content, re.DOTALL)
+            
+            if matches:
+                parsed_objects = []
+                for match in matches:
+                    try:
+                        obj = json.loads(match)
+                        if isinstance(obj, dict) and obj:  # Valid non-empty dict
+                            parsed_objects.append(obj)
+                    except json.JSONDecodeError:
+                        continue
+                
+                if parsed_objects:
+                    logger.info(f"Strategy 5: Recovered {len(parsed_objects)} complete objects from incomplete JSON")
+                    return parsed_objects
+        except Exception as e:
+            logger.warning(f"Strategy 5: Failed with error: {str(e)}")
 
         logger.warning(f"All JSON parsing strategies failed. Response: {response_text[:500]}...")
         return []
