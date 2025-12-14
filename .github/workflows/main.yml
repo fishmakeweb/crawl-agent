@@ -1,0 +1,38 @@
+name: Deploy Self-Learning Agent
+
+on:
+  push:
+    branches:
+      - main  
+      
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH to Self-Learning Agent
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          timeout: 60s
+          debug: true
+          script: |
+            APP_DIR="/root/projects/crawldata/MCP-Servers/self-learning-agent"
+
+            echo "=== Deploying Self-Learning Agent ==="
+            echo "Changing to directory: $APP_DIR"
+            cd "$APP_DIR" || { echo "Directory not found!"; exit 1; }
+
+            echo "Pulling latest code from main..."
+            git pull origin main
+
+            echo "Stopping existing containers..."
+            docker compose --env-file .env.self-learning -f docker-compose.self-learning.yml down
+
+            echo "Starting containers with rebuild (only local Python changes)..."
+            docker compose --env-file .env.self-learning -f docker-compose.self-learning.yml up -d --build
+
+            echo "=== Deploy Self-Learning Agent completed successfully! ==="
