@@ -282,6 +282,46 @@ async def trigger_learning_update():
     algorithm.pending_rollouts = []
     algorithm.feedback_queue = []
 
+    # Auto-save resources to frozen_resources folder
+    try:
+        import os
+        from datetime import datetime
+        
+        # Prepare resources for export
+        resources = {
+            "version": algorithm.current_cycle,
+            "frozen_at": datetime.now().isoformat(),
+            "extraction_prompt": algorithm._get_default_prompt(),
+            "crawl_config": {
+                "timeout": 30,
+                "wait_for": "networkidle",
+                "screenshot": False,
+                "max_pages": 50,
+                "headless": True
+            },
+            "domain_patterns": knowledge_store.get_domain_patterns(),
+            "performance_history": algorithm.performance_history,
+            "total_cycles": algorithm.current_cycle,
+            "performance_metrics": new_resources.get('performance_metrics', {})
+        }
+        
+        # Create frozen_resources directory
+        os.makedirs("/app/frozen_resources", exist_ok=True)
+        
+        # Save versioned file
+        filename = f"/app/frozen_resources/training_resources_v{algorithm.current_cycle}.json"
+        with open(filename, 'w') as f:
+            json.dump(resources, f, indent=2)
+        
+        # Also save as latest.json for production agent
+        latest_filename = "/app/frozen_resources/latest.json"
+        with open(latest_filename, 'w') as f:
+            json.dump(resources, f, indent=2)
+        
+        print(f"💾 Auto-saved resources to {filename} and {latest_filename}")
+    except Exception as e:
+        print(f"⚠️  Failed to auto-save resources: {e}")
+
     # Broadcast update complete
     await sio.emit('learning_cycle_complete', {
         'cycle': algorithm.current_cycle,
@@ -434,6 +474,51 @@ async def trigger_rl_decision():
             "action": action_name,
             "parameters": params,
             "metrics": metrics
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/export/resources")
+async def export_resources():
+    """Export learned resources to frozen_resources folder for production"""
+    try:
+        import os
+        from datetime import datetime
+        
+        # Get current resources from knowledge store
+        resources = {
+            "version": algorithm.current_cycle,
+            "frozen_at": datetime.now().isoformat(),
+            "extraction_prompt": algorithm._get_default_prompt(),
+            "crawl_config": {
+                "timeout": 30,
+                "wait_for": "networkidle",
+                "screenshot": False,
+                "max_pages": 50,
+                "headless": True
+            },
+            "domain_patterns": knowledge_store.get_domain_patterns(),
+            "performance_history": algorithm.performance_history,
+            "total_cycles": algorithm.current_cycle
+        }
+        
+        # Create frozen_resources directory if it doesn't exist
+        os.makedirs("frozen_resources", exist_ok=True)
+        
+        # Save to file
+        filename = f"frozen_resources/training_resources_v{algorithm.current_cycle}.json"
+        with open(filename, 'w') as f:
+            json.dump(resources, f, indent=2)
+        
+        print(f"💾 Exported resources to {filename}")
+        
+        return {
+            "status": "success",
+            "filename": filename,
+            "version": algorithm.current_cycle,
+            "domain_patterns_count": len(resources["domain_patterns"]),
+            "total_cycles": algorithm.current_cycle
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

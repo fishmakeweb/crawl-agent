@@ -170,7 +170,7 @@ class KnowledgeStoreConfig:
     # Vector store (Qdrant)
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333
-    VECTOR_DIMENSION: int = 768  # Gemini embedding size
+    VECTOR_DIMENSION: int = 3072  # External embedding dimension (text-embedding-3-large)
     COLLECTION_NAME: str = "crawler_patterns"
 
     # Graph store (Neo4j)

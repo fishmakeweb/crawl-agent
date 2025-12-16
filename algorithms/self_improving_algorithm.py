@@ -11,17 +11,17 @@ from knowledge.feedback_repository import FeedbackRepository
 
 
 try:
-    from agentlightning import Algorithm
+    from agentlightning import Trainer
     AGENTLIGHTNING_AVAILABLE = True
 except ImportError:
-    print("⚠️  Agent Lightning not installed, using mock Algorithm")
+    print("⚠️  Agent Lightning not installed, using mock Trainer")
     AGENTLIGHTNING_AVAILABLE = False
-    class Algorithm:
+    class Trainer:
         def get_store(self): return None
         def get_adapter(self): return None
 
 
-class SelfImprovingCrawlerAlgorithm(Algorithm if AGENTLIGHTNING_AVAILABLE else object):
+class SelfImprovingCrawlerAlgorithm(Trainer if AGENTLIGHTNING_AVAILABLE else object):
     """
     Algorithm that learns from:
     - Execution results (success/failure patterns)

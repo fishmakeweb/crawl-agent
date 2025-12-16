@@ -582,10 +582,12 @@ Return as JSON with structure:
         query_str = json.dumps(query, sort_keys=True)
         return f"query:{hashlib.md5(query_str.encode()).hexdigest()}"
 
-    def _generate_id(self, pattern: Dict) -> str:
-        """Generate unique ID for pattern"""
+    def _generate_id(self, pattern: Dict) -> int:
+        """Generate unique ID for pattern as integer for Qdrant compatibility"""
         content = json.dumps(pattern, sort_keys=True)
-        return hashlib.sha256(content.encode()).hexdigest()[:16]
+        hash_hex = hashlib.sha256(content.encode()).hexdigest()[:16]
+        # Convert hex to int (use first 16 hex chars for 64-bit integer)
+        return int(hash_hex, 16) % (2**63 - 1)  # Keep within signed 64-bit range
 
     def _update_retrieval_metrics(self, query: Dict, patterns: List[Dict]):
         """Update metrics for RL controller"""

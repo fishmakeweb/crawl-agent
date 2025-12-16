@@ -1,0 +1,380 @@
+{
+  "version": 1,
+  "frozen_at": "2025-12-15T19:30:18.391884",
+  "extraction_prompt": "\nExtract data from this webpage according to the schema and user's request.\n\nURL: {url}\nUser wants: {user_intent}\n\nHTML content (relevant portion):\n{html_content}\n\nTarget extraction schema:\n{schema}\n\nInstructions:\n1. Extract ALL items that match the schema\n2. Ensure field names match the schema exactly\n3. If a field is missing, use null or omit it\n4. Return a JSON array of objects\n5. Be precise with data types (numbers as numbers, not strings)\n\nExample output format:\n[\n  {{\"product_name\": \"Example Product\", \"price\": 99.99, \"brand\": \"ExampleBrand\"}},\n  {{\"product_name\": \"Another Product\", \"price\": 149.99, \"brand\": \"AnotherBrand\"}}\n]\n\nExtract the data now. Return ONLY the JSON array.\n",
+  "crawl_config": {
+    "timeout": 30,
+    "wait_for": "networkidle",
+    "screenshot": false,
+    "max_pages": 50,
+    "headless": true
+  },
+  "domain_patterns": {
+    "picare.vn": [
+      {
+        "id": 30233862937452645,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 1964411797183030000,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": "4ca945fa-083b-41ef-b7c2-688043db3c42",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "644d3c95-02c4-445e-8651-60b182a4bc73",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "ac29a63c-127c-492d-86b8-eab790d48d80",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": 8387914687292297535,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 6576745513448171710,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 81255567923881359,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": "d8ed1a95-7bd0-46ef-bc74-8f12742c0422",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "19cec109-d9ea-4573-9d1e-ebed6023ec02",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "685988e5-f85d-432b-9825-6a335e4734be",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "f6401eff-5794-4698-876e-34e5fcf7c5b4",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": 8438285435692836237,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 1245109361435653786,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 7324692080770749501,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 2113545694111872478,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 6629926080555492826,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": "51168aa7-732e-44ab-aa8b-3a9975976c65",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "e37b37df-0b66-43a2-85c8-4f5100155e76",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "90823a73-98b0-4ec7-a32c-6845773d0d1f",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "8cff6b03-9812-4ca5-a679-4748c1846e54",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "2d3f668f-639f-4bfb-bf47-ed4f228370b7",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": 1867338959506120715,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 667780923348030453,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 393293483246658700,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 2518224163998170047,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": "3f402b5e-35f2-4107-84f0-e43a6bcaef65",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "212e6054-2231-43bb-a424-9325443911fa",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "9f8d13b5-13df-47ab-95f6-d55f2276c866",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "910a2812-b8a4-4e27-abf5-9a8fe87bc94c",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "7ed36852-879d-4a2e-a157-944e942e3e78",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": 4152639428225429261,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 992722886881834782,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 6826178845028908488,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 3655563684902911629,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": "dfd24211-5e38-4f87-89b5-df57b6c3e2d3",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "33e2a7dd-c975-408d-a2b5-07c74eaf0e59",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "133183e4-5b43-4bde-8dae-7f449d866a35",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "52fc8453-d924-41bf-abc8-6d229b7ffce1",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "9e89c328-642e-421a-a880-a59accd12cb8",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": 3471766307760257188,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 5745989296485023621,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 5157022777915783165,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 1277407387780658007,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": "6cc59a0b-f234-43f2-ace7-c748756e54d2",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "fa921496-076e-4791-b378-59f2e64dc233",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "f42c1077-2e10-41a2-af7e-9bde62283d5d",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "5daf2d8a-5563-4138-bc4b-2b7987300507",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "90da1f2f-d8de-4ade-9e2b-4e6da4941b23",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "bfa93998-783d-4e2a-8cca-1af877f086fb",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      }
+    ],
+    "cocoonvietnam.com": [
+      {
+        "id": 3310264893945740805,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": 5613557666286780284,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": "210bee44-d727-42f9-9c47-131ebcc831f4",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "8a12d282-59f2-4cb9-af7a-bc41f180b050",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "8b6b084e-f873-47ba-9b90-ec05e6a5b650",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": 7025550345703847209,
+        "success_rate": 0.5,
+        "frequency": 1,
+        "type": "feedback_insight"
+      },
+      {
+        "id": "8f5bfe7b-f154-4a5a-bad1-3331a8909b52",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      },
+      {
+        "id": "88969867-3550-4721-b9c6-ed3ac0e122c8",
+        "success_rate": 0.8,
+        "frequency": 1,
+        "type": "successful_crawl"
+      }
+    ]
+  },
+  "performance_history": [
+    {
+      "cycle": 0,
+      "avg_reward": 0.7999999999999999,
+      "timestamp": "2025-12-15T19:30:18.391852"
+    }
+  ],
+  "total_cycles": 1,
+  "performance_metrics": {
+    "successful_patterns": 6,
+    "failure_patterns": 0,
+    "feedback_insights": 4,
+    "avg_reward": 0.7999999999999999
+  }
+}
