@@ -255,7 +255,7 @@ class Config:
         # Frozen resources path (production mode)
         self.frozen_resources_path = os.getenv(
             "FROZEN_RESOURCES_PATH",
-            "./frozen_resources_v10.json"
+            "./frozen_resources/latest.json"
         )
 
     def is_training_mode(self) -> bool:

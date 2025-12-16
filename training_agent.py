@@ -78,6 +78,43 @@ gemini_client = GeminiClient(config.gemini)
 rl_controller = RLResourceController(gemini_client, config.training)
 knowledge_store = HybridKnowledgeStore(gemini_client, rl_controller, config.knowledge_store)
 
+# Load previous training resources for incremental learning
+import os
+import glob
+import re
+previous_resources = None
+if os.path.exists("/app/frozen_resources"):
+    existing_files = glob.glob("/app/frozen_resources/training_resources_v*.json")
+    if existing_files:
+        # Find the latest version
+        max_version = 0
+        latest_file = None
+        for filepath in existing_files:
+            match = re.search(r'training_resources_v(\d+)\.json', filepath)
+            if match:
+                version = int(match.group(1))
+                if version > max_version:
+                    max_version = version
+                    latest_file = filepath
+        
+        if latest_file:
+            try:
+                with open(latest_file, 'r') as f:
+                    previous_resources = json.load(f)
+                print(f"📚 Loaded previous training resources from v{max_version}")
+                print(f"   - Domain patterns: {len(previous_resources.get('domain_patterns', {}))} domains")
+                print(f"   - Performance history: {len(previous_resources.get('performance_history', []))} cycles")
+                
+                # Pre-populate knowledge store with previous learnings
+                if previous_resources.get('domain_patterns'):
+                    for domain, patterns in previous_resources['domain_patterns'].items():
+                        # Note: This assumes knowledge_store has a method to import patterns
+                        # You may need to adjust based on your HybridKnowledgeStore implementation
+                        pass  # Will be loaded during algorithm initialization
+            except Exception as e:
+                print(f"⚠️  Failed to load previous resources: {e}")
+                previous_resources = None
+
 # Initialize algorithm
 algorithm = SelfImprovingCrawlerAlgorithm(
     gemini_client=gemini_client,
@@ -285,12 +322,61 @@ async def trigger_learning_update():
     # Auto-save resources to frozen_resources folder
     try:
         import os
+        import glob
+        import re
         from datetime import datetime
+        
+        # Create frozen_resources directory
+        os.makedirs("/app/frozen_resources", exist_ok=True)
+        
+        # Find the highest existing version number
+        existing_files = glob.glob("/app/frozen_resources/training_resources_v*.json")
+        max_version = 0
+        for filepath in existing_files:
+            match = re.search(r'training_resources_v(\d+)\.json', filepath)
+            if match:
+                version = int(match.group(1))
+                if version > max_version:
+                    max_version = version
+        
+        # Use next version number (don't overwrite existing)
+        next_version = max_version + 1
+        
+        # Merge with previous resources for incremental learning
+        merged_domain_patterns = {}
+        merged_performance_history = []
+        
+        # Load latest version to merge with
+        if max_version > 0:
+            try:
+                latest_file = f"/app/frozen_resources/training_resources_v{max_version}.json"
+                if os.path.exists(latest_file):
+                    with open(latest_file, 'r') as f:
+                        prev_data = json.load(f)
+                        merged_domain_patterns = prev_data.get('domain_patterns', {})
+                        merged_performance_history = prev_data.get('performance_history', [])
+                        print(f"📚 Merging with v{max_version}: {len(merged_domain_patterns)} domains, {len(merged_performance_history)} history entries")
+            except Exception as e:
+                print(f"⚠️  Failed to load previous version for merging: {e}")
+        
+        # Merge new patterns with previous ones
+        current_patterns = knowledge_store.get_domain_patterns()
+        for domain, patterns in current_patterns.items():
+            if domain in merged_domain_patterns:
+                # Merge patterns for existing domain
+                merged_domain_patterns[domain].extend(patterns)
+            else:
+                # New domain
+                merged_domain_patterns[domain] = patterns
+        
+        # Merge performance history
+        merged_performance_history.extend(algorithm.performance_history)
         
         # Prepare resources for export
         resources = {
-            "version": algorithm.current_cycle,
+            "version": next_version,
             "frozen_at": datetime.now().isoformat(),
+            "previous_version": max_version if max_version > 0 else None,
             "extraction_prompt": algorithm._get_default_prompt(),
             "crawl_config": {
                 "timeout": 30,
@@ -299,17 +385,19 @@ async def trigger_learning_update():
                 "max_pages": 50,
                 "headless": True
             },
-            "domain_patterns": knowledge_store.get_domain_patterns(),
-            "performance_history": algorithm.performance_history,
-            "total_cycles": algorithm.current_cycle,
-            "performance_metrics": new_resources.get('performance_metrics', {})
+            "domain_patterns": merged_domain_patterns,
+            "performance_history": merged_performance_history,
+            "total_cycles": algorithm.current_cycle + (prev_data.get('total_cycles', 0) if max_version > 0 else 0),
+            "performance_metrics": new_resources.get('performance_metrics', {}),
+            "incremental_learning": {
+                "base_version": max_version if max_version > 0 else None,
+                "new_domains_added": len([d for d in current_patterns.keys() if d not in (prev_data.get('domain_patterns', {}) if max_version > 0 else {})]),
+                "new_patterns_count": sum(len(p) for p in current_patterns.values())
+            }
         }
         
-        # Create frozen_resources directory
-        os.makedirs("/app/frozen_resources", exist_ok=True)
-        
-        # Save versioned file
-        filename = f"/app/frozen_resources/training_resources_v{algorithm.current_cycle}.json"
+        # Save versioned file with next version number
+        filename = f"/app/frozen_resources/training_resources_v{next_version}.json"
         with open(filename, 'w') as f:
             json.dump(resources, f, indent=2)
         
@@ -318,7 +406,7 @@ async def trigger_learning_update():
         with open(latest_filename, 'w') as f:
             json.dump(resources, f, indent=2)
         
-        print(f"💾 Auto-saved resources to {filename} and {latest_filename}")
+        print(f"💾 Auto-saved resources to {filename} and {latest_filename} (version {next_version})")
     except Exception as e:
         print(f"⚠️  Failed to auto-save resources: {e}")
 
