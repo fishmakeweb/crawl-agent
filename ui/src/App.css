@@ -598,3 +598,37 @@ body {
 .progress-fill:hover {
   box-shadow: 0 0 15px rgba(76, 175, 80, 0.7);
 }
+
+/* Dashboard Actions */
+.dashboard-actions {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: var(--card-bg);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+}
+
+.export-button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: all 0.3s ease;
+}
+
+.export-button:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-hover);
+}
+
+.export-button:active {
+  transform: translateY(0);
+}

@@ -102,6 +102,12 @@ export const trainingApi = {
     const response = await api.get('/rl/policy');
     return response.data;
   },
+
+  // Export resources to frozen_resources folder
+  async exportResources() {
+    const response = await api.post('/export/resources');
+    return response.data;
+  },
 };
 
 export default trainingApi;

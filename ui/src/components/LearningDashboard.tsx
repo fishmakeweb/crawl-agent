@@ -200,6 +200,22 @@ export const LearningDashboard: React.FC = () => {
         </div>
       )}
 
+      <div className="dashboard-actions">
+        <button 
+          className="export-button"
+          onClick={async () => {
+            try {
+              const result = await trainingApi.exportResources();
+              alert(`✅ Resources exported successfully!\n\nFile: ${result.filename}\nVersion: ${result.version}\nDomains: ${result.domain_patterns_count}\nCycles: ${result.total_cycles}`);
+            } catch (err) {
+              alert(`❌ Export failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            }
+          }}
+        >
+          📦 Export Resources
+        </button>
+      </div>
+
       <div className="dashboard-footer">
         <p>Last updated: {new Date().toLocaleTimeString()}</p>
       </div>
