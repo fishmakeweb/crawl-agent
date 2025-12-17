@@ -1,0 +1,413 @@
+/* Buffer Review Styles */
+
+.buffer-review {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.buffer-review.loading,
+.buffer-review.error {
+  text-align: center;
+  padding: 40px;
+}
+
+.buffer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #e0e0e0;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.buffer-header h2 {
+  margin: 0;
+  font-size: 24px;
+  color: #333;
+}
+
+.admin-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-selector label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.admin-selector input {
+  padding: 6px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 150px;
+}
+
+.refresh-btn {
+  padding: 8px 16px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.refresh-btn:hover {
+  background: #0056b3;
+}
+
+.empty-buffers {
+  text-align: center;
+  padding: 60px 20px;
+  background: #f8f9fa;
+  border-radius: 8px;
+}
+
+.empty-buffers p {
+  font-size: 18px;
+  color: #666;
+  margin: 0 0 8px 0;
+}
+
+.empty-buffers small {
+  color: #999;
+}
+
+.buffers-container {
+  position: relative;
+}
+
+.buffers-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 20px;
+}
+
+.buffer-card {
+  background: white;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  transition: all 0.2s;
+}
+
+.buffer-card:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+.buffer-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.buffer-job-id {
+  font-family: monospace;
+  font-weight: bold;
+  font-size: 14px;
+  color: #666;
+}
+
+.buffer-patterns-count {
+  background: #17a2b8;
+  color: white;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.buffer-card-body {
+  margin-bottom: 16px;
+}
+
+.buffer-field {
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.buffer-field strong {
+  color: #333;
+  margin-right: 6px;
+}
+
+.buffer-field a {
+  color: #007bff;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.buffer-field a:hover {
+  text-decoration: underline;
+}
+
+.buffer-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.buffer-card-actions button {
+  flex: 1;
+  min-width: 80px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.buffer-card-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-view {
+  background: #17a2b8;
+  color: white;
+}
+
+.btn-view:hover:not(:disabled) {
+  background: #138496;
+}
+
+.btn-commit {
+  background: #28a745;
+  color: white;
+}
+
+.btn-commit:hover:not(:disabled) {
+  background: #218838;
+}
+
+.btn-commit-feedback {
+  background: #007bff;
+  color: white;
+}
+
+.btn-commit-feedback:hover:not(:disabled) {
+  background: #0056b3;
+}
+
+.btn-discard {
+  background: #dc3545;
+  color: white;
+}
+
+.btn-discard:hover:not(:disabled) {
+  background: #c82333;
+}
+
+/* Modal Styles */
+.buffer-details-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.buffer-details-content {
+  background: white;
+  border-radius: 12px;
+  max-width: 900px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.buffer-details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.buffer-details-header h3 {
+  margin: 0;
+  font-size: 20px;
+  color: #333;
+}
+
+.close-btn {
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.close-btn:hover {
+  background: #c82333;
+}
+
+.buffer-details-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.detail-section {
+  margin-bottom: 24px;
+}
+
+.detail-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: #666;
+  border-bottom: 1px solid #e0e0e0;
+  padding-bottom: 8px;
+}
+
+.detail-field {
+  font-size: 14px;
+  color: #555;
+  margin-bottom: 8px;
+  line-height: 1.6;
+}
+
+.detail-field strong {
+  color: #333;
+  margin-right: 8px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.metric-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 16px;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.metric-label {
+  font-size: 12px;
+  opacity: 0.9;
+  margin-bottom: 8px;
+}
+
+.metric-value {
+  font-size: 24px;
+  font-weight: bold;
+}
+
+.patterns-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pattern-item {
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  padding: 12px;
+}
+
+.pattern-item pre {
+  margin: 0;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.patterns-more {
+  text-align: center;
+  color: #666;
+  font-style: italic;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 4px;
+}
+
+.buffer-details-actions {
+  display: flex;
+  gap: 12px;
+  padding: 20px;
+  border-top: 2px solid #e0e0e0;
+}
+
+.btn-commit-large,
+.btn-commit-feedback-large,
+.btn-discard-large {
+  flex: 1;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.btn-commit-large {
+  background: #28a745;
+  color: white;
+}
+
+.btn-commit-large:hover:not(:disabled) {
+  background: #218838;
+  transform: scale(1.02);
+}
+
+.btn-commit-feedback-large {
+  background: #007bff;
+  color: white;
+}
+
+.btn-commit-feedback-large:hover:not(:disabled) {
+  background: #0056b3;
+  transform: scale(1.02);
+}
+
+.btn-discard-large {
+  background: #dc3545;
+  color: white;
+}
+
+.btn-discard-large:hover:not(:disabled) {
+  background: #c82333;
+  transform: scale(1.02);
+}
+
+.btn-commit-large:disabled,
+.btn-commit-feedback-large:disabled,
+.btn-discard-large:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

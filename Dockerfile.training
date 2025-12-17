@@ -46,6 +46,7 @@ COPY crawl4ai-agent /app/crawl4ai-agent
 
 # Copy application code
 COPY self-learning-agent/config.py self-learning-agent/gemini_client.py self-learning-agent/llm_adapters.py self-learning-agent/training_agent.py ./
+COPY self-learning-agent/training_queue_manager.py self-learning-agent/training_buffer.py ./
 COPY self-learning-agent/agents/ ./agents/
 COPY self-learning-agent/algorithms/ ./algorithms/
 COPY self-learning-agent/knowledge/ ./knowledge/

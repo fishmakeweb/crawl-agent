@@ -70,13 +70,16 @@ export interface TrainingStats {
 }
 
 export interface WebSocketMessage {
-  type: 'job_completed' | 'feedback_received' | 'update_cycle' | 'error' | 'crawl_log' | 'crawl_started' | 'pending_rollouts_updated' | 'learning_cycle_complete';
+  type: 'job_completed' | 'feedback_received' | 'update_cycle' | 'error' | 'crawl_log' | 'crawl_started' | 'pending_rollouts_updated' | 'learning_cycle_complete' | 'training_queued' | 'training_started' | 'training_completed' | 'training_failed' | 'version_committed' | 'buffer_discarded';
   job_id?: string;
   success?: boolean;
   items_count?: number;
   quality_rating?: number;
   cycle?: number;
   message?: string;
+  position?: number;
+  version?: number;
+  admin_id?: string;
 }
 
 // Log entry from crawl4ai
@@ -105,4 +108,78 @@ export interface LearningCycleComplete {
     feedback_insights: number;
     avg_reward: number;
   };
+}
+
+// Queue and Buffer Management Types
+
+export interface TrainingJob {
+  job_id: string;
+  admin_id: string;
+  url: string;
+  description: string;
+  timestamp: string;
+  status: 'pending' | 'active' | 'completed' | 'failed';
+  position?: number;
+}
+
+export interface QueueStatus {
+  summary: {
+    pending_count: number;
+    active_count: number;
+    completed_count: number;
+    current_version: number;
+    total_processed: number;
+  };
+  pending_jobs: TrainingJob[];
+  active_jobs: TrainingJob[];
+  pending_count: number;
+  active_count: number;
+}
+
+export interface BufferMetadata {
+  job_id: string;
+  admin_id: string;
+  url: string;
+  description: string;
+  timestamp: string;
+  patterns_count: number;
+  ttl_hours: number;
+}
+
+export interface BufferData {
+  job_id: string;
+  admin_id: string;
+  url: string;
+  description: string;
+  timestamp: string;
+  result?: {
+    success: boolean;
+    data: any[];
+    error?: string;
+    execution_time_ms?: number;
+  };
+  patterns: any[];
+  metrics: {
+    success: boolean;
+    items_extracted: number;
+    execution_time_ms: number;
+    base_reward: number;
+  };
+  training_history: any[];
+}
+
+export interface VersionInfo {
+  version: number;
+  timestamp: string;
+  admin_id: string;
+  patterns_count: number;
+  is_latest: boolean;
+  file_path: string;
+}
+
+export interface QueuedJobResponse {
+  status: 'queued';
+  job_id: string;
+  position: number;
+  message: string;
 }

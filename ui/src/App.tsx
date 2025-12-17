@@ -6,11 +6,14 @@ import { CrawlResults } from './components/CrawlResults';
 import { FeedbackForm } from './components/FeedbackForm';
 import { ClarificationDialog } from './components/ClarificationDialog';
 import { LearningDashboard } from './components/LearningDashboard';
+import { QueueMonitor } from './components/QueueMonitor';
+import { BufferReview } from './components/BufferReview';
+import { VersionHistory } from './components/VersionHistory';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { CrawlLogConsole } from './components/CrawlLogConsole';
 import { trainingApi } from './services/api';
 import wsService from './services/websocket';
-import type { CrawlJob, CrawlResult, FeedbackResponse, WebSocketMessage, LearningCycleComplete } from './types';
+import type { CrawlJob, CrawlResult, FeedbackResponse, WebSocketMessage, LearningCycleComplete, QueuedJobResponse } from './types';
 import './App.css';
 
 // Constants
@@ -26,6 +29,7 @@ interface Notification {
 export const App: React.FC = () => {
   const [currentResult, setCurrentResult] = useState<CrawlResult | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [queuedJobInfo, setQueuedJobInfo] = useState<{ jobId: string; position: number } | null>(null);
   const [crawling, setCrawling] = useState(false);
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [feedbackRequired, setFeedbackRequired] = useState(false);
@@ -34,7 +38,7 @@ export const App: React.FC = () => {
     confidence: number;
     originalFeedback: string;
   } | null>(null);
-  const [activeTab, setActiveTab] = useState<'training' | 'dashboard'>('training');
+  const [activeTab, setActiveTab] = useState<'training' | 'queue' | 'buffers' | 'versions' | 'dashboard'>('training');
   const [wsConnected, setWsConnected] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const notificationTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
@@ -63,6 +67,26 @@ export const App: React.FC = () => {
         } else {
           addNotification('🎓 Learning Cycle Complete!');
         }
+      } else if (message.type === 'training_queued') {
+        addNotification(`🔄 Training job queued at position #${message.position}`);
+        if (message.job_id) {
+          setQueuedJobInfo({ jobId: message.job_id, position: message.position || 0 });
+        }
+      } else if (message.type === 'training_started') {
+        addNotification(`▶️ Training started for job ${message.job_id?.substring(0, 8)}`);
+        setCrawling(true);
+      } else if (message.type === 'training_completed') {
+        addNotification(`✅ Training completed! Buffer created for job ${message.job_id?.substring(0, 8)}`);
+        setCrawling(false);
+        setQueuedJobInfo(null);
+      } else if (message.type === 'training_failed') {
+        addNotification(`❌ Training failed for job ${message.job_id?.substring(0, 8)}: ${message.message}`);
+        setCrawling(false);
+        setQueuedJobInfo(null);
+      } else if (message.type === 'version_committed') {
+        addNotification(`🎯 Version ${message.version} committed by ${message.admin_id}`);
+      } else if (message.type === 'buffer_discarded') {
+        addNotification(`🗑️ Buffer discarded for job ${message.job_id?.substring(0, 8)}`);
       } else if (message.type === 'error') {
         addNotification(`Error: ${message.message}`);
       }
@@ -107,25 +131,35 @@ export const App: React.FC = () => {
   };
 
   const handleCrawlSubmit = async (job: CrawlJob) => {
-    setCrawling(true);
     setCurrentResult(null);
     setCurrentJobId(null);
+    setQueuedJobInfo(null);
     setFeedbackRequired(false);
 
     try {
-      const result = await trainingApi.submitCrawl(job);
-      setCurrentResult(result);
-      setCurrentJobId(result.job_id);  // Track current job ID for logs
-      setFeedbackRequired(true);
-      addNotification('Crawl completed! Please provide feedback.');
+      // With the new queue system, submitCrawl returns QueuedJobResponse instead of CrawlResult
+      const result = await trainingApi.submitCrawl(job) as any;
+      
+      // Check if response is a queued job or immediate result (backwards compatibility)
+      if (result.status === 'queued') {
+        const queuedResponse = result as QueuedJobResponse;
+        setQueuedJobInfo({ jobId: queuedResponse.job_id, position: queuedResponse.position });
+        addNotification(`✅ ${queuedResponse.message}`);
+        // Switch to queue tab automatically to show status
+        setActiveTab('queue');
+      } else {
+        // Legacy: immediate result (for backwards compatibility)
+        setCurrentResult(result as CrawlResult);
+        setCurrentJobId(result.job_id);
+        setFeedbackRequired(true);
+        addNotification('Crawl completed! Please provide feedback.');
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       if (process.env.NODE_ENV === 'development') {
-        console.error('Crawl failed:', error);
+        console.error('Crawl submission failed:', error);
       }
-      addNotification(`Crawl failed: ${errorMessage}`);
-    } finally {
-      setCrawling(false);
+      addNotification(`Submission failed: ${errorMessage}`);
     }
   };
 
@@ -229,30 +263,57 @@ export const App: React.FC = () => {
           className={`tab ${activeTab === 'training' ? 'active' : ''}`}
           onClick={() => setActiveTab('training')}
         >
-          Training Interface
+          Submit Training
+        </button>
+        <button
+          className={`tab ${activeTab === 'queue' ? 'active' : ''}`}
+          onClick={() => setActiveTab('queue')}
+        >
+          Queue Monitor
+        </button>
+        <button
+          className={`tab ${activeTab === 'buffers' ? 'active' : ''}`}
+          onClick={() => setActiveTab('buffers')}
+        >
+          Buffer Review
+        </button>
+        <button
+          className={`tab ${activeTab === 'versions' ? 'active' : ''}`}
+          onClick={() => setActiveTab('versions')}
+        >
+          Version History
         </button>
         <button
           className={`tab ${activeTab === 'dashboard' ? 'active' : ''}`}
           onClick={() => setActiveTab('dashboard')}
         >
-          Learning Dashboard
+          Dashboard
         </button>
       </div>
 
       <main className="app-content">
         <ErrorBoundary>
-          {activeTab === 'training' ? (
+          {activeTab === 'training' && (
             <div className="training-interface">
               <div className="training-column">
                 <section className="section">
-                  <h2>Submit Crawl Job</h2>
+                  <h2>Submit Training Job</h2>
                   <CrawlJobForm onSubmit={handleCrawlSubmit} disabled={crawling} />
+                  
+                  {queuedJobInfo && (
+                    <div className="queued-job-notice">
+                      <h3>✅ Job Queued Successfully</h3>
+                      <p><strong>Job ID:</strong> {queuedJobInfo.jobId.substring(0, 8)}</p>
+                      <p><strong>Position:</strong> #{queuedJobInfo.position}</p>
+                      <p>Switch to <button onClick={() => setActiveTab('queue')} className="inline-link-btn">Queue Monitor</button> to track progress</p>
+                    </div>
+                  )}
                 </section>
               </div>
 
               <div className="results-column">
                 <section className="section">
-                  <h2>Crawl Results</h2>
+                  <h2>Legacy Crawl Results</h2>
                   <CrawlResults result={currentResult} />
                   <CrawlLogConsole jobId={currentJobId} isActive={crawling} />
                 </section>
@@ -268,9 +329,25 @@ export const App: React.FC = () => {
                 )}
               </div>
             </div>
-          ) : (
-            <LearningDashboard />
           )}
+
+          {activeTab === 'queue' && <QueueMonitor />}
+
+          {activeTab === 'buffers' && (
+            <BufferReview
+              onCommit={(jobId, version) => {
+                addNotification(`✅ Version ${version} created from job ${jobId.substring(0, 8)}`);
+                setActiveTab('versions');
+              }}
+              onDiscard={(jobId) => {
+                addNotification(`🗑️ Buffer discarded for job ${jobId.substring(0, 8)}`);
+              }}
+            />
+          )}
+
+          {activeTab === 'versions' && <VersionHistory />}
+
+          {activeTab === 'dashboard' && <LearningDashboard />}
         </ErrorBoundary>
       </main>
 

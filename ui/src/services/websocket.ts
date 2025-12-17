@@ -62,6 +62,31 @@ class WebSocketService {
       this.handleMessage({ type: 'learning_cycle_complete', ...data });
     });
 
+    // Queue management events
+    this.socket.on('training_queued', (data: any) => {
+      this.handleMessage({ type: 'training_queued', ...data });
+    });
+
+    this.socket.on('training_started', (data: any) => {
+      this.handleMessage({ type: 'training_started', ...data });
+    });
+
+    this.socket.on('training_completed', (data: any) => {
+      this.handleMessage({ type: 'training_completed', ...data });
+    });
+
+    this.socket.on('training_failed', (data: any) => {
+      this.handleMessage({ type: 'training_failed', ...data });
+    });
+
+    this.socket.on('version_committed', (data: any) => {
+      this.handleMessage({ type: 'version_committed', ...data });
+    });
+
+    this.socket.on('buffer_discarded', (data: any) => {
+      this.handleMessage({ type: 'buffer_discarded', ...data });
+    });
+
     this.socket.on('connect_error', (error) => {
       if (process.env.NODE_ENV === 'development') {
         console.error('WebSocket connection error:', error);

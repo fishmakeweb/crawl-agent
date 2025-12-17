@@ -108,6 +108,73 @@ export const trainingApi = {
     const response = await api.post('/export/resources');
     return response.data;
   },
+
+  // Queue Management APIs
+  async getQueueStatus(): Promise<import('../types').QueueStatus> {
+    const response = await api.get('/queue/status');
+    return response.data;
+  },
+
+  async getPendingJobs(): Promise<import('../types').TrainingJob[]> {
+    const response = await api.get('/queue/pending');
+    return response.data.pending_jobs || [];
+  },
+
+  // Buffer Management APIs
+  async listBuffers(): Promise<import('../types').BufferMetadata[]> {
+    const response = await api.get('/buffers/list');
+    return response.data.buffers || [];
+  },
+
+  async getPendingBuffers(): Promise<import('../types').BufferMetadata[]> {
+    const response = await api.get('/buffers/pending');
+    return response.data.pending_buffers || [];
+  },
+
+  async getBuffer(jobId: string, adminId: string = 'admin'): Promise<import('../types').BufferData> {
+    const response = await api.get(`/buffer/${jobId}`, {
+      params: { admin_id: adminId }
+    });
+    return response.data;
+  },
+
+  async commitTraining(jobId: string, adminId: string, feedback?: string): Promise<{ 
+    status: 'pending' | 'version_created'; 
+    version?: number; 
+    message: string;
+    pending_count?: number;
+    commits_needed?: number;
+    commit_count?: number;
+  }> {
+    const response = await api.post(`/commit-training/${jobId}`, { 
+      admin_id: adminId,
+      feedback: feedback 
+    });
+    return response.data;
+  },
+
+  async getPendingCommitsStatus(): Promise<{
+    pending_count: number;
+    commits_needed: number;
+    threshold: number;
+    ready_for_version: boolean;
+  }> {
+    const response = await api.get('/pending-commits/status');
+    return response.data;
+  },
+
+  async discardBuffer(jobId: string, adminId: string = 'admin'): Promise<{ message: string }> {
+    const response = await api.delete(`/buffer/${jobId}`, {
+      params: { admin_id: adminId }
+    });
+    return response.data;
+  },
+
+  // Version Management APIs
+  async getVersionHistory(): Promise<{current_version: number; versions: import('../types').VersionInfo[]; total_versions: number}> {
+    const response = await api.get('/versions/history');
+    return response.data;
+  },
 };
 
 export default trainingApi;

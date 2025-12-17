@@ -1,0 +1,280 @@
+/* Version History Styles */
+
+.version-history {
+  padding: 20px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.version-history.loading,
+.version-history.error,
+.version-history.empty {
+  text-align: center;
+  padding: 40px;
+}
+
+.version-history.empty p {
+  font-size: 18px;
+  color: #666;
+  margin: 0 0 8px 0;
+}
+
+.version-history.empty small {
+  color: #999;
+}
+
+.version-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 32px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.version-header h2 {
+  margin: 0;
+  font-size: 24px;
+  color: #333;
+}
+
+.refresh-btn {
+  padding: 8px 16px;
+  background: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.refresh-btn:hover {
+  background: #0056b3;
+}
+
+.versions-timeline {
+  position: relative;
+  padding-left: 40px;
+  margin-bottom: 32px;
+}
+
+.versions-timeline::before {
+  content: '';
+  position: absolute;
+  left: 15px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(to bottom, #667eea 0%, #764ba2 100%);
+}
+
+.version-item {
+  position: relative;
+  margin-bottom: 32px;
+  display: flex;
+  gap: 20px;
+}
+
+.version-item.latest {
+  background: linear-gradient(to right, rgba(102, 126, 234, 0.05), transparent);
+  padding: 16px;
+  border-radius: 8px;
+  margin-left: -56px;
+  padding-left: 56px;
+}
+
+.version-marker {
+  position: absolute;
+  left: -40px;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.version-number {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 14px;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  border: 3px solid white;
+}
+
+.version-item.latest .version-number {
+  width: 60px;
+  height: 60px;
+  font-size: 16px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  }
+  50% {
+    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.6);
+  }
+}
+
+.latest-badge {
+  background: #28a745;
+  color: white;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+}
+
+.version-content {
+  flex: 1;
+  background: white;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  transition: all 0.2s;
+}
+
+.version-content:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  transform: translateX(4px);
+}
+
+.version-item.latest .version-content {
+  border-color: #667eea;
+  border-width: 3px;
+}
+
+.version-header-info {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.version-timestamp {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.timestamp-full {
+  font-size: 14px;
+  color: #666;
+}
+
+.timestamp-relative {
+  font-size: 12px;
+  color: #999;
+  font-style: italic;
+}
+
+.version-details {
+  margin-bottom: 12px;
+}
+
+.version-field {
+  font-size: 14px;
+  color: #555;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.version-field strong {
+  color: #333;
+  margin-right: 8px;
+}
+
+.version-field code {
+  background: #f8f9fa;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: #e83e8c;
+}
+
+.version-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+  border-radius: 6px;
+  margin-top: 12px;
+}
+
+.status-icon {
+  font-size: 16px;
+}
+
+.status-text {
+  font-size: 13px;
+  color: #667eea;
+  font-weight: 500;
+}
+
+.version-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  padding: 24px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+}
+
+.summary-card {
+  text-align: center;
+  color: white;
+}
+
+.summary-label {
+  font-size: 14px;
+  opacity: 0.9;
+  margin-bottom: 8px;
+}
+
+.summary-value {
+  font-size: 32px;
+  font-weight: bold;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .versions-timeline {
+    padding-left: 30px;
+  }
+
+  .version-marker {
+    left: -30px;
+  }
+
+  .version-number {
+    width: 40px;
+    height: 40px;
+    font-size: 12px;
+  }
+
+  .version-item.latest .version-number {
+    width: 45px;
+    height: 45px;
+    font-size: 13px;
+  }
+
+  .version-item.latest {
+    margin-left: -46px;
+    padding-left: 46px;
+  }
+}
