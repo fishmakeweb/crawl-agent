@@ -183,3 +183,51 @@ export interface QueuedJobResponse {
   position: number;
   message: string;
 }
+
+// Learning Insights Types
+export interface DomainExpertise {
+  domain: string;
+  pattern_count: number;
+  avg_success_rate: number;
+  total_usage: number;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+export interface LearningInsights {
+  summary: {
+    total_patterns: number;
+    domains_learned: number;
+    avg_success_rate: number;
+    learning_cycles: number;
+  };
+  domain_expertise: DomainExpertise[];
+  pattern_types: { [key: string]: number };
+  recent_performance: Array<{
+    cycle: number;
+    avg_reward: number;
+    timestamp: string;
+  }>;
+  domain_distribution?: Array<{
+    domain: string;
+    patterns: number;
+    success_rate: number;
+  }>;
+  success_distribution?: {
+    excellent: number;
+    good: number;
+    moderate: number;
+    poor: number;
+  };
+  storage_metrics?: {
+    vector_size_mb: number;
+    graph_nodes: number;
+    graph_relationships: number;
+    total_stored_patterns: number;
+    pattern_redundancy: number;
+  };
+  knowledge_quality?: {
+    high_confidence_domains: number;
+    medium_confidence_domains: number;
+    low_confidence_domains: number;
+  };
+}

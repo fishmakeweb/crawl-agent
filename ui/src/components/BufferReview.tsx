@@ -115,6 +115,31 @@ export const BufferReview: React.FC<BufferReviewProps> = ({ onCommit, onDiscard 
     handleCommit(feedbackJobId, feedback);
   };
 
+  const handleNegativeFeedback = async (jobId: string) => {
+    const feedback = prompt(
+      `Mark job ${jobId.substring(0, 8)} as negative example?\n\n` +
+      `This will keep the crawl for learning anti-patterns (reward: 0.3).\n` +
+      `Use for: partial failures, edge cases, or problematic patterns to avoid.\n\n` +
+      `Enter reason/feedback:`
+    );
+    
+    if (!feedback) return;
+
+    setProcessing(jobId);
+    try {
+      setError(null);
+      const result = await trainingApi.submitNegativeFeedback(jobId, adminId, feedback);
+      alert(`⚠️ ${result.message}\n\n${result.next_action}`);
+      
+      // Refresh buffers
+      await fetchBuffers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit negative feedback');
+    } finally {
+      setProcessing(null);
+    }
+  };
+
   const handleDiscard = async (jobId: string) => {
     if (!window.confirm(`Discard training job ${jobId.substring(0, 8)}? This cannot be undone.`)) {
       return;
@@ -255,6 +280,14 @@ export const BufferReview: React.FC<BufferReviewProps> = ({ onCommit, onDiscard 
                     📝 Commit + Feedback
                   </button>
                   <button
+                    onClick={() => handleNegativeFeedback(buffer.job_id)}
+                    className="btn-negative"
+                    disabled={processing === buffer.job_id}
+                    title="Mark as negative example for learning anti-patterns"
+                  >
+                    ⚠️ Negative Example
+                  </button>
+                  <button
                     onClick={() => handleDiscard(buffer.job_id)}
                     className="btn-discard"
                     disabled={processing === buffer.job_id}
@@ -380,6 +413,14 @@ export const BufferReview: React.FC<BufferReviewProps> = ({ onCommit, onDiscard 
                     disabled={processing === selectedBuffer.job_id}
                   >
                     📝 Commit + Feedback
+                  </button>
+                  <button
+                    onClick={() => handleNegativeFeedback(selectedBuffer.job_id)}
+                    className="btn-negative-large"
+                    disabled={processing === selectedBuffer.job_id}
+                    title="Mark as negative example for learning anti-patterns"
+                  >
+                    ⚠️ Negative Example
                   </button>
                   <button
                     onClick={() => handleDiscard(selectedBuffer.job_id)}

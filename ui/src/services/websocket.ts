@@ -139,6 +139,51 @@ class WebSocketService {
   isConnected(): boolean {
     return this.socket?.connected || false;
   }
+
+  // Room Management Methods
+  joinRoom(roomName: string) {
+    if (this.socket?.connected) {
+      this.socket.emit('join_room', roomName);
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`Joining room: ${roomName}`);
+      }
+    }
+  }
+
+  leaveRoom(roomName: string) {
+    if (this.socket?.connected) {
+      this.socket.emit('leave_room', roomName);
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`Leaving room: ${roomName}`);
+      }
+    }
+  }
+
+  subscribeDashboard() {
+    if (this.socket?.connected) {
+      this.socket.emit('subscribe_dashboard');
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Subscribed to dashboard updates');
+      }
+    }
+  }
+
+  joinAdminWorkspace(adminId: string) {
+    if (this.socket?.connected) {
+      this.socket.emit('join_admin_workspace', adminId);
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`Joined admin workspace: ${adminId}`);
+      }
+    }
+  }
+
+  joinTrainingSession(jobId: string) {
+    this.joinRoom(`training_${jobId}`);
+  }
+
+  leaveTrainingSession(jobId: string) {
+    this.leaveRoom(`training_${jobId}`);
+  }
 }
 
 export const wsService = new WebSocketService();

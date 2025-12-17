@@ -205,6 +205,15 @@
   background: #0056b3;
 }
 
+.btn-negative {
+  background: #ff9800;
+  color: white;
+}
+
+.btn-negative:hover:not(:disabled) {
+  background: #e68900;
+}
+
 .btn-discard {
   background: #dc3545;
   color: white;
@@ -392,6 +401,16 @@
 
 .btn-commit-feedback-large:hover:not(:disabled) {
   background: #0056b3;
+  transform: scale(1.02);
+}
+
+.btn-negative-large {
+  background: #ff9800;
+  color: white;
+}
+
+.btn-negative-large:hover:not(:disabled) {
+  background: #e68900;
   transform: scale(1.02);
 }
 

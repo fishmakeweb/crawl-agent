@@ -1,7 +1,7 @@
 // API client for Training Agent
 
 import axios, { AxiosError } from 'axios';
-import type { CrawlJob, CrawlResult, FeedbackResponse, TrainingStats } from '../types';
+import type { CrawlJob, CrawlResult, FeedbackResponse, TrainingStats, LearningInsights } from '../types';
 
 const API_BASE_URL = process.env.REACT_APP_TRAINING_SERVICE_URL || 'http://localhost:8001';
 
@@ -91,6 +91,12 @@ export const trainingApi = {
     return response.data;
   },
 
+  // Get learning insights - what the AI has learned
+  async getLearningInsights(signal?: AbortSignal): Promise<LearningInsights> {
+    const response = await api.get('/knowledge/insights', { signal });
+    return response.data;
+  },
+
   // Trigger consolidation
   async triggerConsolidation() {
     const response = await api.post('/knowledge/consolidate');
@@ -149,6 +155,19 @@ export const trainingApi = {
     const response = await api.post(`/commit-training/${jobId}`, { 
       admin_id: adminId,
       feedback: feedback 
+    });
+    return response.data;
+  },
+
+  async submitNegativeFeedback(jobId: string, adminId: string, feedback: string): Promise<{
+    status: string;
+    job_id: string;
+    message: string;
+    feedback: string;
+    next_action: string;
+  }> {
+    const response = await api.post(`/buffer/${jobId}/negative-feedback`, null, {
+      params: { admin_id: adminId, feedback }
     });
     return response.data;
   },

@@ -3,7 +3,7 @@ Training Agent Entry Point
 Active learning with Agent-Lightning integration
 """
 import asyncio
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -70,8 +70,8 @@ app.add_middleware(
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins='*',
-    logger=False,
-    engineio_logger=False
+    logger=True,
+    engineio_logger=True
 )
 socket_app = socketio.ASGIApp(sio, app)
 
@@ -94,6 +94,10 @@ logger = logging.getLogger(__name__)
 # Initialize queue manager and buffer
 queue_manager = TrainingQueueManager(redis_client)
 training_buffer = TrainingBuffer(redis_client)
+
+# Initialize Training Hub for centralized event management
+from hubs.training_hub import TrainingHub
+training_hub = TrainingHub(sio)
 
 print(f"✅ Training queue initialized at version {queue_manager.get_current_version()}")
 
@@ -149,9 +153,6 @@ algorithm = SelfImprovingCrawlerAlgorithm(
 # Initialize agent in training mode
 agent = SharedCrawlerAgent(gemini_client, mode="training")
 
-# Active connections for WebSocket
-active_connections: List[WebSocket] = []
-
 # Job queue
 job_queue = {}
 feedback_queue = {}
@@ -201,57 +202,38 @@ async def training_queue_worker():
                         queue_manager.mark_job_active(job)
                         
                         # Emit progress
-                        await sio.emit('training_started', {
-                            'job_id': job['job_id'],
-                            'admin_id': job['admin_id']
-                        })
+                        await training_hub.emit_training_started(job['job_id'], job['admin_id'])
                         
                         # Process training
                         try:
                             await process_training_job(job)
                             queue_manager.mark_job_completed(job['job_id'])
                             
-                            # Emit completion
-                            await sio.emit('training_completed', {
-                                'job_id': job['job_id'],
-                                'admin_id': job['admin_id'],
-                                'status': 'ready_to_commit'
-                            })
-                            
-                            # Emit buffer ready
-                            await sio.emit('buffer_ready', {
-                                'job_id': job['job_id'],
-                                'admin_id': job['admin_id'],
-                                'status': 'ready_to_commit'
-                            })
+                            # Emit completion via hub
+                            await training_hub.emit_training_completed(
+                                job['job_id'], 
+                                job['admin_id'],
+                                {'status': 'ready_to_commit'}
+                            )
                             
                             # Emit queue update
                             queue_status = queue_manager.get_queue_status()
-                            await sio.emit('queue_updated', {
-                                'event': 'job_completed',
-                                'job_id': job['job_id'],
-                                'queue_status': queue_status
-                            })
+                            await training_hub.emit_queue_updated(queue_status)
                             
                         except Exception as e:
                             logger.error(f"❌ Training job {job['job_id']} failed: {e}", exc_info=True)
                             queue_manager.mark_job_failed(job['job_id'], str(e))
                             
-                            # Emit failure
-                            await sio.emit('training_failed', {
-                                'job_id': job['job_id'],
-                                'admin_id': job['admin_id'],
-                                'error': str(e)
-                            })
+                            # Emit failure via hub
+                            await training_hub.emit_training_failed(
+                                job['job_id'],
+                                job['admin_id'],
+                                str(e)
+                            )
                             
                             # Emit queue update
                             queue_status = queue_manager.get_queue_status()
-                            await sio.emit('queue_updated', {
-                                'event': 'job_failed',
-                                'job_id': job['job_id'],
-                                'error': str(e),
-                                'queue_status': queue_status
-                            })
+                            await training_hub.emit_queue_updated(queue_status)
                         
                 finally:
                     lock.release()
@@ -275,13 +257,11 @@ async def process_training_job(job: Dict):
     
     try:
         # Emit training progress started
-        await sio.emit('training_progress', {
-            'job_id': job_id,
-            'admin_id': admin_id,
-            'stage': 'crawling',
-            'message': f'Starting crawl for {job["url"]}',
-            'progress': 10
-        })
+        await training_hub.emit_training_progress(
+            job_id, 'crawling', 10,
+            f'Starting crawl for {job["url"]}',
+            admin_id
+        )
         
         # 1. Execute crawl
         task = {
@@ -294,26 +274,21 @@ async def process_training_job(job: Dict):
         result = await agent.execute_crawl(task)
         
         # Emit crawl completed
-        await sio.emit('training_progress', {
-            'job_id': job_id,
-            'admin_id': admin_id,
-            'stage': 'crawl_completed',
-            'message': f'Crawl completed. Success: {result["success"]}',
-            'progress': 40,
-            'items_extracted': len(result.get("data", []))
-        })
+        await training_hub.emit_training_progress(
+            job_id, 'crawl_completed', 40,
+            f'Crawl completed. Success: {result["success"]}. Items: {len(result.get("data", []))}',
+            admin_id
+        )
         
         # 2. Calculate reward
         reward = 0.8 if result["success"] else 0.2
         
         # Emit learning started
-        await sio.emit('training_progress', {
-            'job_id': job_id,
-            'admin_id': admin_id,
-            'stage': 'learning',
-            'message': 'Analyzing patterns and learning...',
-            'progress': 60
-        })
+        await training_hub.emit_training_progress(
+            job_id, 'learning', 60,
+            'Analyzing patterns and learning...',
+            admin_id
+        )
         
         # 3. Learn patterns (in memory)
         rollout_data = [{
@@ -331,14 +306,12 @@ async def process_training_job(job: Dict):
         learned_resources = await algorithm.learn_from_interactive_rollouts(rollout_data)
         
         # Emit patterns learned
-        await sio.emit('training_progress', {
-            'job_id': job_id,
-            'admin_id': admin_id,
-            'stage': 'patterns_learned',
-            'message': 'Patterns extracted and analyzed',
-            'progress': 80,
-            'patterns_count': sum(len(p) for p in learned_resources.get("domain_patterns", {}).values())
-        })
+        patterns_count = sum(len(p) for p in learned_resources.get("domain_patterns", {}).values())
+        await training_hub.emit_training_progress(
+            job_id, 'patterns_learned', 80,
+            f'Patterns extracted and analyzed ({patterns_count} patterns)',
+            admin_id
+        )
         
         # 4. Buffer crawl result
         training_buffer.store_result(admin_id, job_id, result)
@@ -383,21 +356,24 @@ async def process_training_job(job: Dict):
         logger.info(f"✅ Training job {job_id} completed and buffered")
         
         # Emit training complete with buffer created
-        await sio.emit('training_progress', {
-            'job_id': job_id,
-            'admin_id': admin_id,
-            'stage': 'completed',
-            'message': 'Training completed and buffered for review',
-            'progress': 100
-        })
+        await training_hub.emit_training_progress(
+            job_id, 'completed', 100,
+            'Training completed and buffered for review',
+            admin_id
+        )
         
-        await sio.emit('buffer_created', {
-            'job_id': job_id,
-            'admin_id': admin_id,
-            'patterns_count': sum(len(patterns) for patterns in domain_patterns.values()),
-            'domains': list(domain_patterns.keys()),
-            'reward': reward
-        })
+        patterns_count = sum(len(patterns) for patterns in domain_patterns.values())
+        await training_hub.emit_buffer_created(
+            job_id, admin_id,
+            {
+                'buffer_id': job_id,
+                'patterns_count': patterns_count,
+                'domains': list(domain_patterns.keys()),
+                'reward': reward,
+                'ttl_hours': 24
+            }
+        )
+        await training_hub.emit_buffer_ready(job_id, admin_id, patterns_count)
         
     except Exception as e:
         # Mark buffer as failed
@@ -425,17 +401,6 @@ async def startup():
 
 
 # Socket.IO Event Handlers
-@sio.event
-async def connect(sid, environ):
-    """Handle Socket.IO client connection"""
-    print(f"🔌 Socket.IO client connected: {sid}")
-    await sio.emit('connected', {'status': 'connected', 'sid': sid})
-
-@sio.event
-async def disconnect(sid):
-    """Handle Socket.IO client disconnection"""
-    print(f"🔌 Socket.IO client disconnected: {sid}")
-
 @sio.event
 async def ping(sid):
     """Handle ping from client"""
@@ -519,20 +484,12 @@ async def train_crawl(request: TrainCrawlRequest, admin_id: str = "admin"):
         # Enqueue (returns position in queue)
         position = queue_manager.enqueue_training(training_job)
         
-        # Emit to Socket.IO
-        await sio.emit('training_queued', {
-            'job_id': job_id,
-            'position': position,
-            'admin_id': admin_id
-        })
+        # Emit via hub
+        await training_hub.emit_training_queued(job_id, position, admin_id)
         
         # Emit queue status update
         queue_status = queue_manager.get_queue_status()
-        await sio.emit('queue_updated', {
-            'event': 'job_queued',
-            'job_id': job_id,
-            'queue_status': queue_status
-        })
+        await training_hub.emit_queue_updated(queue_status)
         
         print(f"📥 Training job {job_id} queued at position {position}")
         
@@ -819,14 +776,8 @@ async def commit_training(job_id: str, request: CommitRequest):
             
             logger.info(f"📦 Added job {job_id} to pending commits ({pending_count}/5)")
             
-            # Emit commit progress
-            await sio.emit('commit_progress', {
-                'job_id': job_id,
-                'admin_id': admin_id,
-                'pending_count': pending_count,
-                'threshold': 5,
-                'commits_needed': max(0, 5 - pending_count)
-            })
+            # Emit commit progress via hub
+            await training_hub.emit_commit_progress(pending_count, 5, admin_id)
             
             # Check if we have 5 pending commits
             if pending_count >= 5:
@@ -940,21 +891,12 @@ async def commit_training(job_id: str, request: CommitRequest):
                         
                         logger.info(f"✅ Created version {next_version} from {len(pending_commits)} commits")
                         
-                        # Emit success event
-                        await sio.emit('version_committed', {
-                            'version': next_version,
-                            'job_ids': all_job_ids,
-                            'commit_count': len(pending_commits)
-                        })
-                        
-                        # Also emit version_created for UI compatibility
-                        await sio.emit('version_created', {
-                            'version': next_version,
-                            'commit_count': len(pending_commits),
-                            'patterns_count': new_version_data["incremental_learning"]["total_patterns"],
-                            'domains_count': new_version_data["incremental_learning"]["total_domains"],
-                            'timestamp': new_version_data["frozen_at"]
-                        })
+                        # Emit version created via hub
+                        await training_hub.emit_version_created(
+                            next_version,
+                            new_version_data["incremental_learning"]["total_patterns"],
+                            new_version_data["incremental_learning"]["total_domains"]
+                        )
                         
                         return {
                             "status": "version_created",
@@ -1096,15 +1038,83 @@ async def discard_buffer(job_id: str, admin_id: str):
         
         training_buffer.clear_buffer(admin_id, job_id)
         
-        await sio.emit('buffer_discarded', {
-            'job_id': job_id,
-            'admin_id': admin_id
-        })
+        await training_hub.emit_buffer_discarded(job_id, admin_id)
         
         return {
             "status": "discarded",
             "job_id": job_id,
             "message": "Training buffer discarded successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/buffer/{job_id}/negative-feedback")
+async def submit_negative_feedback(job_id: str, admin_id: str, feedback: str = ""):
+    """
+    Mark buffer as negative example (low quality but useful for learning).
+    This keeps the crawl as a learning example with low reward (0.3) instead of discarding it.
+    Useful for: partial failures, edge cases, anti-patterns to avoid.
+    """
+    try:
+        if not training_buffer.buffer_exists(admin_id, job_id):
+            raise HTTPException(status_code=404, detail="Buffer not found")
+        
+        # Get existing buffer data
+        buffer_data = training_buffer.get_buffer_data(admin_id, job_id)
+        
+        # Update metrics to override reward
+        current_metrics = buffer_data.get("metrics", {})
+        current_metrics["reward"] = 0.3  # Low reward for negative example
+        current_metrics["reward_override"] = 0.3
+        current_metrics["feedback_type"] = "negative"
+        current_metrics["negative_feedback"] = feedback
+        current_metrics["learning_value"] = "anti-pattern"
+        
+        # Don't store back to buffer - we're going to commit it directly
+        # Get other buffer data needed for commit
+        buffered_patterns = buffer_data["patterns"]
+        buffered_history = buffer_data.get("history", [])
+        
+        # Acquire version increment lock for commit
+        lock = redis_client.lock(
+            "training:lock:version_increment",
+            timeout=30,
+            blocking_timeout=5
+        )
+        
+        with lock:
+            # Add to pending commits with negative feedback marker
+            pending_commit = {
+                "job_id": job_id,
+                "admin_id": admin_id,
+                "feedback": f"[NEGATIVE EXAMPLE] {feedback}",
+                "patterns": buffered_patterns,
+                "metrics": current_metrics,
+                "history": buffered_history,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            redis_client.rpush("training:pending_commits", json.dumps(pending_commit))
+            pending_count = redis_client.llen("training:pending_commits")
+            
+            # Clean up buffer immediately
+            training_buffer.clear_buffer(admin_id, job_id)
+            
+            logger.info(f"⚠️ Added negative example {job_id} to pending commits ({pending_count}/5)")
+            
+            # Emit commit progress via hub
+            await training_hub.emit_commit_progress(pending_count, 5, admin_id)
+        
+        return {
+            "status": "committed_negative",
+            "job_id": job_id,
+            "message": f"Negative example committed (reward: 0.3)",
+            "feedback": feedback,
+            "pending_commits": pending_count,
+            "next_action": "Will be included in next version as anti-pattern"
         }
     except HTTPException:
         raise
@@ -1138,25 +1148,6 @@ async def get_version_history():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket for real-time updates"""
-    await websocket.accept()
-    active_connections.append(websocket)
-
-    try:
-        while True:
-            # Keep connection alive
-            data = await websocket.receive_text()
-
-            # Echo heartbeat
-            if data == "ping":
-                await websocket.send_text("pong")
-
-    except WebSocketDisconnect:
-        active_connections.remove(websocket)
-
-
 @app.get("/stats")
 async def get_stats():
     """Get training agent statistics"""
@@ -1177,6 +1168,102 @@ async def get_stats():
 async def get_patterns():
     """Get learned patterns by domain"""
     return knowledge_store.get_domain_patterns()
+
+
+@app.get("/knowledge/insights")
+async def get_learning_insights():
+    """Get AI learning insights - what the AI has learned through training"""
+    try:
+        domain_patterns = knowledge_store.get_domain_patterns()
+        
+        # Calculate insights
+        total_patterns = sum(len(patterns) for patterns in domain_patterns.values())
+        
+        # Domain statistics
+        domain_stats = []
+        for domain, patterns in domain_patterns.items():
+            if patterns:
+                avg_success = sum(p.get('success_rate', 0) for p in patterns) / len(patterns)
+                total_frequency = sum(p.get('frequency', 0) for p in patterns)
+                
+                domain_stats.append({
+                    'domain': domain,
+                    'pattern_count': len(patterns),
+                    'avg_success_rate': round(avg_success, 3),
+                    'total_usage': total_frequency,
+                    'confidence': 'high' if avg_success >= 0.7 else 'medium' if avg_success >= 0.5 else 'low'
+                })
+        
+        # Sort by pattern count (most learned domains)
+        domain_stats.sort(key=lambda x: x['pattern_count'], reverse=True)
+        
+        # Pattern type distribution
+        pattern_types = {}
+        for patterns in domain_patterns.values():
+            for p in patterns:
+                ptype = p.get('type', 'unknown')
+                pattern_types[ptype] = pattern_types.get(ptype, 0) + 1
+        
+        # Get recent learning trends from performance history
+        recent_performance = algorithm.performance_history[-10:] if algorithm.performance_history else []
+        
+        # Get knowledge store metrics (vector size, graph nodes, etc.)
+        storage_metrics = knowledge_store.get_metrics()
+        
+        # Domain distribution for pie chart
+        domain_distribution = [
+            {'domain': s['domain'], 'patterns': s['pattern_count'], 'success_rate': s['avg_success_rate']}
+            for s in domain_stats[:8]  # Top 8 for visualization
+        ]
+        
+        # Learning progress timeline
+        learning_timeline = []
+        if recent_performance:
+            for perf in recent_performance:
+                learning_timeline.append({
+                    'cycle': perf.get('cycle', 0),
+                    'reward': round(perf.get('avg_reward', 0), 3),
+                    'patterns_at_cycle': total_patterns  # Simplified - in production track per cycle
+                })
+        
+        # Success rate distribution across domains
+        success_distribution = {
+            'excellent': len([s for s in domain_stats if s['avg_success_rate'] >= 0.8]),
+            'good': len([s for s in domain_stats if 0.6 <= s['avg_success_rate'] < 0.8]),
+            'moderate': len([s for s in domain_stats if 0.4 <= s['avg_success_rate'] < 0.6]),
+            'poor': len([s for s in domain_stats if s['avg_success_rate'] < 0.4])
+        }
+        
+        return {
+            'summary': {
+                'total_patterns': total_patterns,
+                'domains_learned': len(domain_patterns),
+                'avg_success_rate': round(sum(s['avg_success_rate'] for s in domain_stats) / len(domain_stats), 3) if domain_stats else 0,
+                'learning_cycles': algorithm.current_cycle
+            },
+            'domain_expertise': domain_stats[:10],  # Top 10 domains for display
+            'pattern_types': pattern_types,
+            'recent_performance': recent_performance,
+            'domain_distribution': domain_distribution,
+            'learning_timeline': learning_timeline,
+            'success_distribution': success_distribution,
+            'storage_metrics': {
+                'vector_size_mb': round(storage_metrics.get('vector_size_mb', 0), 2),
+                'graph_nodes': storage_metrics.get('graph_nodes', 0),
+                'graph_relationships': storage_metrics.get('graph_relationships', 0),
+                'total_stored_patterns': storage_metrics.get('total_patterns', 0),
+                'pattern_redundancy': round(storage_metrics.get('pattern_redundancy', 0) * 100, 1)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting learning insights: {e}")
+        return {
+            'summary': {'total_patterns': 0, 'domains_learned': 0, 'avg_success_rate': 0, 'learning_cycles': 0},
+            'domain_expertise': [],
+            'pattern_types': {},
+            'recent_performance': [],
+            'knowledge_quality': {'high_confidence_domains': 0, 'medium_confidence_domains': 0, 'low_confidence_domains': 0}
+        }
 
 
 @app.post("/knowledge/consolidate")
@@ -1268,13 +1355,6 @@ async def broadcast_job_completed(job_id: str, result: dict):
         "items_count": len(result.get("data", []))
     }
     await sio.emit('job_completed', message)
-    
-    # Also broadcast to native WebSocket clients for backward compatibility
-    for connection in active_connections:
-        try:
-            await connection.send_text(json.dumps(message))
-        except:
-            pass
 
 
 async def broadcast_feedback_received(job_id: str, interpretation: dict):
@@ -1285,13 +1365,6 @@ async def broadcast_feedback_received(job_id: str, interpretation: dict):
         "quality_rating": interpretation.get("quality_rating", 3)
     }
     await sio.emit('feedback_received', message)
-    
-    # Also broadcast to native WebSocket clients for backward compatibility
-    for connection in active_connections:
-        try:
-            await connection.send_text(json.dumps(message))
-        except:
-            pass
 
 
 # Background task: Start RL controller monitoring

@@ -1,12 +1,14 @@
 // Dashboard component for visualizing learning progress and statistics
 
 import React, { useEffect, useState, useCallback } from 'react';
-import type { TrainingStats } from '../types';
+import type { TrainingStats, LearningInsights } from '../types';
 import { trainingApi } from '../services/api';
 import wsService from '../services/websocket';
+import './LearningDashboard.css';
 
 export const LearningDashboard: React.FC = () => {
   const [stats, setStats] = useState<TrainingStats | null>(null);
+  const [insights, setInsights] = useState<LearningInsights | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [queueStats, setQueueStats] = useState({ pending: 0, active: 0, completed: 0 });
@@ -62,6 +64,13 @@ export const LearningDashboard: React.FC = () => {
       // Load latest version
       const versionData = await trainingApi.getVersionHistory();
       setLatestVersion(versionData.current_version);
+
+      // Load learning insights
+      const insightsData = await trainingApi.getLearningInsights();
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Insights loaded:', insightsData);
+      }
+      setInsights(insightsData);
     } catch (err) {
       if (process.env.NODE_ENV === 'development') {
         console.error('Failed to load initial data:', err);
@@ -70,6 +79,9 @@ export const LearningDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // Join dashboard room for targeted updates
+    wsService.subscribeDashboard();
+
     // Load initial stats and real-time data
     loadStats();
     loadInitialData();
@@ -226,6 +238,231 @@ export const LearningDashboard: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* AI Learning Insights Section */}
+      {insights && insights.summary && (
+        <div className="insights-section">
+          <h3 className="section-title">🧠 AI Learning Insights</h3>
+          
+          {/* Show message if no learning data yet */}
+          {insights.summary.total_patterns === 0 ? (
+            <div className="no-insights">
+              <p>🎓 No learning data yet. Submit training jobs to start learning!</p>
+            </div>
+          ) : (
+            <>
+          {/* Domain Expertise */}
+          {insights.domain_expertise && insights.domain_expertise.length > 0 && (
+            <div className="expertise-container">
+              <h4>🎓 Domain Expertise (Top 10)</h4>
+              <div className="expertise-table">
+                <div className="table-header">
+                  <div className="col-domain">Domain</div>
+                  <div className="col-patterns">Patterns</div>
+                  <div className="col-success">Success Rate</div>
+                  <div className="col-usage">Usage</div>
+                  <div className="col-confidence">Confidence</div>
+                </div>
+                {insights.domain_expertise.slice(0, 10).map((domain, idx) => (
+                  <div key={idx} className="table-row">
+                    <div className="col-domain">
+                      <span className="domain-rank">#{idx + 1}</span>
+                      <span className="domain-name">{domain.domain}</span>
+                    </div>
+                    <div className="col-patterns">{domain.pattern_count}</div>
+                    <div className="col-success">
+                      <div className="success-badge" style={{
+                        backgroundColor: domain.avg_success_rate >= 0.7 ? '#dcfce7' : domain.avg_success_rate >= 0.5 ? '#fef3c7' : '#fee2e2',
+                        color: domain.avg_success_rate >= 0.7 ? '#166534' : domain.avg_success_rate >= 0.5 ? '#92400e' : '#991b1b'
+                      }}>
+                        {(domain.avg_success_rate * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div className="col-usage">{domain.total_usage}×</div>
+                    <div className="col-confidence">
+                      <span className={`confidence-badge ${domain.confidence}`}>
+                        {domain.confidence === 'high' ? '🟢 High' : domain.confidence === 'medium' ? '🟡 Medium' : '🔴 Low'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Domain Distribution Chart */}
+          {insights.domain_distribution && insights.domain_distribution.length > 0 && (
+            <div className="domain-chart-container">
+              <h4>🌐 Pattern Distribution by Domain</h4>
+              <div className="domain-chart">
+                {insights.domain_distribution.map((domain, idx) => {
+                  const maxPatterns = Math.max(...(insights.domain_distribution || []).map(d => d.patterns));
+                  const percentage = (domain.patterns / maxPatterns) * 100;
+                  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+                  
+                  return (
+                    <div key={idx} className="domain-bar-item">
+                      <div className="domain-bar-label">
+                        <span className="domain-bar-name">{domain.domain}</span>
+                        <span className="domain-bar-count">{domain.patterns} patterns</span>
+                      </div>
+                      <div className="domain-bar-track">
+                        <div 
+                          className="domain-bar-fill"
+                          style={{
+                            width: `${percentage}%`,
+                            backgroundColor: colors[idx % colors.length]
+                          }}
+                        >
+                          <span className="domain-bar-percent">{(domain.success_rate * 100).toFixed(0)}% success</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Success Rate Distribution */}
+          {insights.success_distribution && (
+            <div className="success-dist-container">
+              <h4>📊 Learning Quality Distribution</h4>
+              <div className="success-dist-chart">
+                <div className="success-dist-item">
+                  <div className="success-dist-bar" style={{
+                    width: `${insights.success_distribution.excellent}`,
+                    maxWidth: '100%',
+                    backgroundColor: '#10b981'
+                  }}>
+                    <span className="success-dist-label">Excellent (80%+)</span>
+                    <span className="success-dist-value">{insights.success_distribution.excellent}</span>
+                  </div>
+                </div>
+                <div className="success-dist-item">
+                  <div className="success-dist-bar" style={{
+                    width: `${insights.success_distribution.good}`,
+                    maxWidth: '100%',
+                    backgroundColor: '#3b82f6'
+                  }}>
+                    <span className="success-dist-label">Good (60-80%)</span>
+                    <span className="success-dist-value">{insights.success_distribution.good}</span>
+                  </div>
+                </div>
+                <div className="success-dist-item">
+                  <div className="success-dist-bar" style={{
+                    width: `${insights.success_distribution.moderate}`,
+                    maxWidth: '100%',
+                    backgroundColor: '#f59e0b'
+                  }}>
+                    <span className="success-dist-label">Moderate (40-60%)</span>
+                    <span className="success-dist-value">{insights.success_distribution.moderate}</span>
+                  </div>
+                </div>
+                <div className="success-dist-item">
+                  <div className="success-dist-bar" style={{
+                    width: `${insights.success_distribution.poor}`,
+                    maxWidth: '100%',
+                    backgroundColor: '#ef4444'
+                  }}>
+                    <span className="success-dist-label">Needs Improvement (&lt;40%)</span>
+                    <span className="success-dist-value">{insights.success_distribution.poor}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Learning Performance Trend */}
+          {insights.recent_performance.length > 0 && (
+            <div className="performance-container">
+              <h4>📈 Recent Learning Performance</h4>
+              <div className="performance-chart">
+                {insights.recent_performance.map((perf, idx) => {
+                  const maxReward = Math.max(...insights.recent_performance.map(p => p.avg_reward));
+                  const heightPercent = (perf.avg_reward / maxReward) * 100;
+                  
+                  return (
+                    <div key={idx} className="performance-bar-container">
+                      <div 
+                        className="performance-bar"
+                        style={{ height: `${heightPercent}%` }}
+                        title={`Cycle ${perf.cycle}: ${(perf.avg_reward * 100).toFixed(1)}%`}
+                      />
+                      <div className="performance-label">C{perf.cycle}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="performance-legend">
+                <span>Last {insights.recent_performance.length} learning cycles</span>
+                <span className="performance-note">Higher bars = Better performance</span>
+              </div>
+            </div>
+          )}
+
+          {/* Storage Metrics */}
+          {insights.storage_metrics && (
+            <div className="storage-container">
+              <h4>💾 Knowledge Store Metrics</h4>
+              <div className="storage-grid">
+                <div className="storage-card">
+                  <div className="storage-icon">📦</div>
+                  <div className="storage-info">
+                    <div className="storage-label">Vector Size</div>
+                    <div className="storage-value">{insights.storage_metrics.vector_size_mb} MB</div>
+                  </div>
+                </div>
+                <div className="storage-card">
+                  <div className="storage-icon">🔗</div>
+                  <div className="storage-info">
+                    <div className="storage-label">Graph Nodes</div>
+                    <div className="storage-value">{insights.storage_metrics.graph_nodes}</div>
+                  </div>
+                </div>
+                <div className="storage-card">
+                  <div className="storage-icon">↔️</div>
+                  <div className="storage-info">
+                    <div className="storage-label">Relationships</div>
+                    <div className="storage-value">{insights.storage_metrics.graph_relationships}</div>
+                  </div>
+                </div>
+                <div className="storage-card">
+                  <div className="storage-icon">🎯</div>
+                  <div className="storage-info">
+                    <div className="storage-label">Stored Patterns</div>
+                    <div className="storage-value">{insights.storage_metrics.total_stored_patterns}</div>
+                  </div>
+                </div>
+                <div className="storage-card">
+                  <div className="storage-icon">📊</div>
+                  <div className="storage-info">
+                    <div className="storage-label">Redundancy</div>
+                    <div className="storage-value">{insights.storage_metrics.pattern_redundancy}%</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Pattern Types */}
+          {insights.pattern_types && Object.keys(insights.pattern_types).length > 0 && (
+            <div className="pattern-types-container">
+              <h4>🔍 Pattern Types Learned</h4>
+              <div className="pattern-types-grid">
+                {Object.entries(insights.pattern_types).map(([type, count]) => (
+                  <div key={type} className="pattern-type-card">
+                    <div className="pattern-type-name">{type}</div>
+                    <div className="pattern-type-count">{count}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="dashboard-actions">
         <button 
