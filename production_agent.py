@@ -4,6 +4,7 @@ Serves frozen resources with optimized performance
 """
 import asyncio
 import sys
+import uuid
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,9 +13,12 @@ import json
 import os
 import logging
 
-from config import Config
+from config import Config, LLMProvider
 from gemini_client import GeminiClient  # Now supports multiple providers
 from agents.shared_crawler_agent import SharedCrawlerAgent
+
+# RAG Services
+from services.conversation_rag_service import ConversationRAGService
 
 # Add crawl4ai-agent to path for Kafka publisher
 sys.path.append(os.path.join(os.path.dirname(__file__), '../crawl4ai-agent'))
@@ -67,6 +71,39 @@ else:
 # Initialize agent in production mode
 agent = SharedCrawlerAgent(gemini_client, mode="production")
 
+# Initialize RAG service for conversation memory
+# Detect actual embedding dimension by generating a test embedding
+logger.info("Detecting embedding dimension...")
+test_embedding = asyncio.run(llm_client.embed("test"))
+vector_dim = len(test_embedding)
+logger.info(f"✅ Detected {vector_dim}D embeddings for {config.llm.PROVIDER.value}")
+
+# Try to reuse existing Qdrant connection from HybridKnowledgeStore
+qdrant_client = None
+try:
+    from knowledge.hybrid_knowledge_store import HybridKnowledgeStore
+    from training_queue_manager import TrainingQueueManager
+    
+    # Create minimal RL controller for knowledge store (not used in production)
+    class MinimalRLController:
+        def observe(self, *args, **kwargs): pass
+        def get_adjusted_params(self): return {}
+    
+    knowledge_store = HybridKnowledgeStore(llm_client, MinimalRLController(), config.knowledge_store)
+    qdrant_client = knowledge_store.vector_store
+    logger.info("✅ Reusing Qdrant connection from HybridKnowledgeStore")
+except Exception as e:
+    logger.info(f"HybridKnowledgeStore not available ({e}), creating new Qdrant connection")
+    from qdrant_client import QdrantClient
+    qdrant_client = QdrantClient(
+        host=config.knowledge_store.QDRANT_HOST,
+        port=config.knowledge_store.QDRANT_PORT
+    )
+    logger.info(f"✅ Created new Qdrant connection: {config.knowledge_store.QDRANT_HOST}:{config.knowledge_store.QDRANT_PORT}")
+
+rag_service = ConversationRAGService(qdrant_client, llm_client, vector_dimension=vector_dim)
+logger.info("✅ RAG service initialized for conversation memory")
+
 print(f"🚀 Production Agent started on port 8000")
 
 
@@ -109,6 +146,39 @@ class CrawlResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
+
+# ========== RAG Chat Models ==========
+
+class RAGChatRequest(BaseModel):
+    """Request for RAG-powered chat"""
+    conversation_id: str
+    message_id: str
+    message: str
+    assignment_context: Optional[str] = None
+    user_id: str
+    top_k: int = 5
+    time_window_hours: int = 24
+
+
+class RAGChatResponse(BaseModel):
+    """Response from RAG chat"""
+    success: bool
+    response: str
+    response_id: str
+    retrieved_context_count: int
+    relevance_scores: List[float]
+    error: Optional[str] = None
+
+
+class IndexCrawlResultRequest(BaseModel):
+    """Request to index crawl results for future retrieval"""
+    conversation_id: str
+    message_id: str
+    crawl_job_id: str
+    result_summary: str
+
+
+# ========== Existing Models ==========
 
 class QueryRequest(BaseModel):
     """Request for RAG query"""
@@ -280,6 +350,145 @@ async def generate_embedding(request: EmbeddingRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/rag/chat", response_model=RAGChatResponse)
+async def rag_chat(request: RAGChatRequest):
+    """
+    Handle RAG-powered chat with conversation memory.
+    Retrieves relevant context from previous messages and generates contextual response.
+    """
+    try:
+        # Generate unique response ID as valid GUID
+        response_id = str(uuid.uuid4())
+        
+        # Step 1: Create conversation collection if not exists
+        await rag_service.create_conversation_collection(request.conversation_id)
+        
+        # Step 2: Retrieve relevant context from past messages
+        retrieved_contexts = await rag_service.retrieve_context(
+            request.conversation_id,
+            request.message,
+            top_k=request.top_k,
+            time_window_hours=request.time_window_hours
+        )
+        
+        relevance_scores = [ctx['score'] for ctx in retrieved_contexts]
+        logger.info(f"Retrieved {len(retrieved_contexts)} relevant messages for conversation {request.conversation_id}")
+        if relevance_scores:
+            logger.info(f"Relevance scores: {relevance_scores}")
+        
+        # Step 3: Build enriched prompt with context
+        enriched_prompt = rag_service.build_rag_prompt(
+            retrieved_context=retrieved_contexts,
+            current_query=request.message,
+            assignment_context=request.assignment_context
+        )
+        
+        # Step 4: Generate response using LLM
+        logger.info(f"Generating RAG response for conversation {request.conversation_id}")
+        ai_response = await llm_client.generate(enriched_prompt)
+        
+        if not ai_response:
+            raise ValueError("LLM returned empty response")
+        
+        # Step 5: Index user message for future retrieval
+        await rag_service.index_message(
+            conversation_id=request.conversation_id,
+            message_id=request.message_id,
+            role="user",
+            content=request.message,
+            message_type="text",
+            metadata={"user_id": request.user_id}
+        )
+        
+        # Step 6: Index AI response for future retrieval
+        await rag_service.index_message(
+            conversation_id=request.conversation_id,
+            message_id=response_id,
+            role="assistant",
+            content=ai_response,
+            message_type="text",
+            metadata={"user_id": request.user_id}
+        )
+        
+        logger.info(f"Successfully handled RAG chat for conversation {request.conversation_id}")
+        
+        return RAGChatResponse(
+            success=True,
+            response=ai_response,
+            response_id=response_id,
+            retrieved_context_count=len(retrieved_contexts),
+            relevance_scores=relevance_scores
+        )
+        
+    except Exception as e:
+        logger.error(f"RAG chat failed: {str(e)}", exc_info=True)
+        return RAGChatResponse(
+            success=False,
+            response="",
+            response_id="",
+            retrieved_context_count=0,
+            relevance_scores=[],
+            error=str(e)
+        )
+
+
+@app.post("/rag/index-crawl-result")
+async def index_crawl_result(request: IndexCrawlResultRequest):
+    """
+    Index a crawl result for future RAG retrieval.
+    Marks message with has_crawl_results=true and crawl_job_id metadata.
+    """
+    try:
+        # Create conversation collection if not exists
+        await rag_service.create_conversation_collection(request.conversation_id)
+        
+        # Index crawl result with special metadata
+        await rag_service.index_message(
+            conversation_id=request.conversation_id,
+            message_id=request.message_id,
+            role="assistant",
+            content=request.result_summary,
+            message_type="crawl_result",
+            has_crawl_results=True,
+            crawl_job_id=request.crawl_job_id,
+            metadata={"crawl_job_id": request.crawl_job_id}
+        )
+        
+        logger.info(f"Indexed crawl result {request.crawl_job_id} for conversation {request.conversation_id}")
+        
+        return {
+            "success": True,
+            "message": "Crawl result indexed successfully",
+            "conversation_id": request.conversation_id,
+            "message_id": request.message_id
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to index crawl result: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/rag/conversation/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """
+    Delete a conversation's collection from Qdrant.
+    Use when conversation is no longer needed to free resources.
+    """
+    try:
+        await rag_service.delete_conversation(conversation_id)
+        
+        logger.info(f"Deleted conversation collection: {conversation_id}")
+        
+        return {
+            "success": True,
+            "message": f"Conversation {conversation_id} deleted successfully"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to delete conversation: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -295,6 +504,9 @@ async def root():
             "query": "/query (POST)",
             "summary": "/summary (POST)",
             "embedding": "/embedding (POST)",
+            "rag_chat": "/rag/chat (POST)",
+            "rag_index_crawl": "/rag/index-crawl-result (POST)",
+            "rag_delete": "/rag/conversation/{id} (DELETE)",
             "stats": "/stats (GET)"
         }
     }

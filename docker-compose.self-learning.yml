@@ -28,6 +28,9 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
       - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
       - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-crawl4ai-agent}
+      # Qdrant Configuration
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
     volumes:
       - ./frozen_resources:/app/frozen_resources:ro
       - ./crawl4ai-agent:/app/crawl4ai-agent:ro

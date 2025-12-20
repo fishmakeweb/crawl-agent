@@ -29,6 +29,7 @@ COPY self-learning-agent/config.py self-learning-agent/gemini_client.py self-lea
 COPY self-learning-agent/agents/ ./agents/
 COPY self-learning-agent/algorithms/ ./algorithms/
 COPY self-learning-agent/knowledge/ ./knowledge/
+COPY self-learning-agent/services/ ./services/
 
 # Create frozen resources directory
 RUN mkdir -p /app/frozen_resources
