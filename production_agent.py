@@ -4,6 +4,7 @@ Serves frozen resources with optimized performance
 """
 import asyncio
 import sys
+import uuid
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -145,21 +146,38 @@ async def health_check():
 @app.post("/crawl", response_model=CrawlResponse)
 async def crawl(request: CrawlRequest):
     """Execute production crawl with frozen resources and Kafka events"""
+    job_id = request.job_id or str(uuid.uuid4())
+    user_id = request.user_id or "unknown"
+    prompt = request.prompt or request.user_description or ""
+    extract_schema = request.extract_schema or request.extraction_schema or {}
+
     try:
-        # Support both 'prompt' and 'user_description' fields
-        prompt = request.prompt or request.user_description or ""
-        extract_schema = request.extract_schema or request.extraction_schema or {}
+        if not request.job_id:
+            logger.info(f"No job_id provided. Generated {job_id} for request")
         
         task = {
             "url": request.url,
             "prompt": prompt,
             "user_description": prompt,  # For backward compatibility
             "extraction_schema": extract_schema,
-            "job_id": request.job_id,
+            "job_id": job_id,
             "user_id": request.user_id,
             "navigation_steps": request.navigation_steps,
             "max_pages": request.max_pages
         }
+
+        if kafka_publisher and job_id:
+            kafka_publisher.publish_progress(
+                "CrawlJobAccepted",
+                job_id,
+                user_id,
+                {
+                    "url": request.url,
+                    "prompt": prompt,
+                    "max_pages": request.max_pages
+                }
+            )
+            kafka_publisher.flush(timeout=5.0)
 
         # Execute with frozen resources and Kafka publisher
         result = await agent.execute_crawl(
@@ -189,6 +207,12 @@ async def crawl(request: CrawlRequest):
                 pages_collected=nav_result.get("pages_collected", 1)
             )
 
+        metadata = result.get("metadata", {})
+        if isinstance(metadata, dict):
+            metadata.setdefault("job_id", job_id)
+        else:
+            metadata = {"job_id": job_id}
+
         response = CrawlResponse(
             success=result["success"],
             data=result.get("data", []),
@@ -196,9 +220,27 @@ async def crawl(request: CrawlRequest):
             execution_time_ms=result.get("execution_time_ms", 0.0),
             conversation_name=result.get("conversation_name", "Data Collection"),
             embedding_data=embedding_data_model,
-            metadata=result.get("metadata", {}),
+            metadata=metadata,
             error=result.get("error")
         )
+
+        if kafka_publisher and job_id:
+            nav_payload = result.get("navigation_result", {}) or {}
+            kafka_publisher.publish_progress(
+                "CrawlJobCompleted",
+                job_id,
+                user_id,
+                {
+                    "success": result.get("success", True),
+                    "items_count": len(result.get("data", [])),
+                    "extracted_data": result.get("data", []),
+                    "final_url": nav_payload.get("final_url", request.url),
+                    "execution_time_ms": result.get("execution_time_ms", 0.0),
+                    "pages_collected": nav_payload.get("pages_collected", 1),
+                    "conversation_name": result.get("conversation_name", "Data Collection")
+                }
+            )
+            kafka_publisher.flush(timeout=5.0)
         
         # Debug: Log the ACTUAL JSON that will be sent to C#
         response_dict = response.dict()
@@ -213,6 +255,15 @@ async def crawl(request: CrawlRequest):
         return response
 
     except Exception as e:
+        if kafka_publisher and job_id:
+            kafka_publisher.publish_error(
+                job_id,
+                user_id,
+                str(e),
+                {"url": request.url, "prompt": prompt}
+            )
+            kafka_publisher.flush(timeout=5.0)
+
         logger.error(f"Crawl failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 

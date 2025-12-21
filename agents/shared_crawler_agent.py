@@ -264,6 +264,9 @@ Return only the number (0.0-1.0).
             resources = self._get_default_resources()
 
         try:
+            if kafka_publisher is not None:
+                self.base_crawler.kafka_publisher = kafka_publisher
+
             # Use 'prompt' field (preferred) or fall back to 'user_description'
             prompt = task.get("prompt") or task.get("user_description", "")
             
