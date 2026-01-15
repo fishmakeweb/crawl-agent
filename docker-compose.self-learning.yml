@@ -24,6 +24,14 @@ services:
       - EXTERNAL_LLM_MODEL_NAME=${EXTERNAL_LLM_MODEL_NAME}
       - EXTERNAL_EMBEDDING_MODEL=${EXTERNAL_EMBEDDING_MODEL}
       - EXTERNAL_EMBEDDING_DIMENSION=${EXTERNAL_EMBEDDING_DIMENSION}
+      # Pagination Detection Configuration
+      - PAGINATION_DETECTION_MODEL=${PAGINATION_DETECTION_MODEL:-models/gemini-2.0-flash-exp}
+      - MIN_PAGINATION_CONFIDENCE=${MIN_PAGINATION_CONFIDENCE:-0.7}
+      - MAX_CONCURRENT_CRAWLER_TABS=${MAX_CONCURRENT_CRAWLER_TABS:-5}
+      - KAFKA_VERBOSE_EVENTS=${KAFKA_VERBOSE_EVENTS:-false}
+      - PAGINATION_REDETECTION_STRATEGY=${PAGINATION_REDETECTION_STRATEGY:-hybrid}
+      - PAGINATION_REDETECTION_MILESTONES=${PAGINATION_REDETECTION_MILESTONES:-5,10,15,20,30}
+      - PAGINATION_CONFIDENCE_MARGIN=${PAGINATION_CONFIDENCE_MARGIN:-0.1}
       # Kafka Configuration
       - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
       - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
@@ -31,10 +39,12 @@ services:
     volumes:
       - ./frozen_resources:/app/frozen_resources:ro
       - ./crawl4ai-agent:/app/crawl4ai-agent:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - selflearning-network
+    # Link to Kafka container with alias so "host.docker.internal" resolves to Kafka
+    # This is set by connect-kafka.sh which updates KAFKA_CONTAINER_NAME in .env
+    external_links:
+      - "${KAFKA_CONTAINER_NAME}:host.docker.internal"
     restart: unless-stopped
     command: python production_agent.py
 
@@ -59,6 +69,14 @@ services:
       - EXTERNAL_EMBEDDING_DIMENSION=${EXTERNAL_EMBEDDING_DIMENSION:-1536}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.7}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-8000}
+      # Pagination Detection Configuration
+      - PAGINATION_DETECTION_MODEL=${PAGINATION_DETECTION_MODEL:-models/gemini-2.0-flash-exp}
+      - MIN_PAGINATION_CONFIDENCE=${MIN_PAGINATION_CONFIDENCE:-0.7}
+      - MAX_CONCURRENT_CRAWLER_TABS=${MAX_CONCURRENT_CRAWLER_TABS:-5}
+      - KAFKA_VERBOSE_EVENTS=${KAFKA_VERBOSE_EVENTS:-false}
+      - PAGINATION_REDETECTION_STRATEGY=${PAGINATION_REDETECTION_STRATEGY:-hybrid}
+      - PAGINATION_REDETECTION_MILESTONES=${PAGINATION_REDETECTION_MILESTONES:-5,10,15,20,30}
+      - PAGINATION_CONFIDENCE_MARGIN=${PAGINATION_CONFIDENCE_MARGIN:-0.1}
       # Infrastructure
       - LIGHTNING_STORE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/lightning_db
       - UPDATE_FREQUENCY=${UPDATE_FREQUENCY:-5}
@@ -90,8 +108,8 @@ services:
         condition: service_healthy
     networks:
       - selflearning-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    external_links:
+      - "${KAFKA_CONTAINER_NAME}:host.docker.internal"
     restart: unless-stopped
     deploy:
       resources:
@@ -120,6 +138,9 @@ services:
       - qdrant_data:/qdrant/storage
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
+      # Optional: Enable API key authentication (uncomment and set QDRANT_API_KEY in .env)
+      # - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+      # - QDRANT__SERVICE__READ_ONLY_API_KEY=${QDRANT_READ_ONLY_API_KEY}
     networks:
       - selflearning-network
     restart: unless-stopped
@@ -152,6 +173,13 @@ services:
       - NEO4J_dbms_memory_heap_initial__size=512M
       - NEO4J_dbms_memory_heap_max__size=1G
       - NEO4J_ACCEPT_LICENSE_AGREEMENT=yes
+      # # Security: Enforce authentication (enabled by default but explicit here)
+      # - NEO4J_dbms_security_auth__enabled=true
+      # # Browser connection: Use Bolt+S3 routing for secure browser connections
+      # # This tells Neo4j Browser to use bolt+s3://neo4j.fishmakeweb.id.vn:443 instead of bolt://localhost:7687
+      # - NEO4J_browser_post__connect__cmd=config; config connectionTimeout: 30000;
+      # # Note: For external Bolt access, use SSH tunnel: ssh -L 7687:localhost:7687 user@server
+      # # Internal containers still use bolt://neo4j:7687 via docker network
     networks:
       - selflearning-network
     restart: unless-stopped
@@ -290,6 +318,7 @@ services:
 networks:
   selflearning-network:
     driver: bridge
+    name: selflearning-network
 
 # ============================================================================
 # VOLUMES

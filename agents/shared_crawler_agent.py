@@ -14,8 +14,8 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Add crawl4ai-agent to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../crawl4ai-agent'))
+# Add crawl4ai-agent to path (inside self-learning-agent)
+sys.path.append(os.path.join(os.path.dirname(__file__), '../crawl4ai-agent'))
 
 try:
     from agentlightning import LitAgent, NamedResources, Rollout

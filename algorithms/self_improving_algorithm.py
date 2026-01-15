@@ -198,19 +198,27 @@ class SelfImprovingCrawlerAlgorithm(Trainer if AGENTLIGHTNING_AVAILABLE else obj
         }
 
     def _extract_successful_patterns(self, spans: List) -> List[Dict]:
-        """Extract patterns from successful crawls"""
+        """Extract patterns from successful crawls with intelligent typing"""
         patterns = []
 
         for span in spans:
             attrs = span.attributes
+            
+            # Classify pattern type based on extraction schema
+            extraction_fields = attrs.get("extracted_fields", [])
+            pattern_type = self._classify_pattern_type(
+                extraction_fields=extraction_fields,
+                schema=attrs.get("extraction_schema", {}),
+                extracted_data=attrs.get("extracted_data", [])
+            )
 
             # Extract useful patterns
             pattern = {
                 "id": span.span_id,
-                "type": "successful_crawl",
+                "type": pattern_type,  # Dynamic typing!
                 "domain": attrs.get("domain", "unknown"),
                 "selectors": attrs.get("selectors", []),
-                "extraction_fields": attrs.get("extracted_fields", []),
+                "extraction_fields": extraction_fields,
                 "success_rate": attrs.get("reward", 0.0),
                 "frequency": 1,
                 "metadata": {
@@ -218,12 +226,80 @@ class SelfImprovingCrawlerAlgorithm(Trainer if AGENTLIGHTNING_AVAILABLE else obj
                     "items_extracted": attrs.get("items_extracted", 0),
                     "pages_collected": attrs.get("pages_collected", 0)
                 },
-                "description": f"Successful pattern for {attrs.get('domain', 'unknown')}"
+                "description": f"{pattern_type} pattern for {attrs.get('domain', 'unknown')}"
             }
 
             patterns.append(pattern)
 
         return patterns
+    
+    def _classify_pattern_type(
+        self, 
+        extraction_fields: List[str], 
+        schema: Dict,
+        extracted_data: List[Dict]
+    ) -> str:
+        """
+        Classify pattern based on extracted fields and data structure
+        
+        Returns specific pattern types instead of generic 'successful_crawl'
+        """
+        if not extraction_fields:
+            return "generic_extraction"
+        
+        # Normalize field names to lowercase for matching
+        fields_lower = [f.lower() for f in extraction_fields]
+        
+        # 1. E-commerce product patterns
+        product_indicators = ["price", "product_name", "product_title", "title", "name"]
+        if any(indicator in fields_lower for indicator in product_indicators):
+            if any(f in fields_lower for f in ["price", "cost", "amount"]):
+                if any(f in fields_lower for f in ["rating", "review", "stars"]):
+                    return "product_with_reviews"
+                return "product_list"
+            if any(f in fields_lower for f in ["title", "name", "product_name"]):
+                return "product_catalog"
+        
+        # 2. Pricing-focused extraction
+        if any(f in fields_lower for f in ["price", "cost", "amount", "discount"]):
+            return "price_extraction"
+        
+        # 3. Review/rating patterns
+        if any(f in fields_lower for f in ["rating", "review", "comment", "feedback"]):
+            return "review_extraction"
+        
+        # 4. Article/content patterns
+        article_indicators = ["headline", "title", "content", "body", "article", "post"]
+        if any(indicator in fields_lower for indicator in article_indicators):
+            if any(f in fields_lower for f in ["author", "date", "published"]):
+                return "article_extraction"
+            return "content_extraction"
+        
+        # 5. Contact/business info
+        contact_indicators = ["email", "phone", "address", "contact"]
+        if any(indicator in fields_lower for indicator in contact_indicators):
+            return "contact_info"
+        
+        # 6. Navigation/pagination patterns
+        if any(f in fields_lower for f in ["next_page", "pagination", "load_more"]):
+            return "navigation_pattern"
+        
+        # 7. Table/structured data (many fields, numeric data)
+        if len(extraction_fields) > 5:
+            if extracted_data:
+                sample = extracted_data[0] if extracted_data else {}
+                # Check if mostly numeric/structured data
+                numeric_count = sum(1 for v in sample.values() if isinstance(v, (int, float)))
+                if numeric_count > len(sample) * 0.5:
+                    return "tabular_data"
+            return "multi_field_extraction"
+        
+        # 8. Image/media extraction
+        if any(f in fields_lower for f in ["image", "img", "photo", "picture", "url"]):
+            return "media_extraction"
+        
+        # Default fallback
+        return "generic_extraction"
 
     def _analyze_failures(self, spans: List) -> List[Dict]:
         """Analyze failure patterns to learn what to avoid"""

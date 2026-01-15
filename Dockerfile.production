@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install chromium && \
     playwright install-deps chromium
 
-# Copy crawl4ai-agent dependency
-COPY crawl4ai-agent /app/crawl4ai-agent
+# Copy crawl4ai-agent dependency (now inside self-learning-agent)
+COPY self-learning-agent/crawl4ai-agent /app/crawl4ai-agent
 
 # Set Python path to include crawl4ai-agent
 ENV PYTHONPATH="${PYTHONPATH}:/app/crawl4ai-agent"

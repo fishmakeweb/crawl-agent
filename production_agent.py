@@ -18,7 +18,7 @@ from gemini_client import GeminiClient  # Now supports multiple providers
 from agents.shared_crawler_agent import SharedCrawlerAgent
 
 # Add crawl4ai-agent to path for Kafka publisher
-sys.path.append(os.path.join(os.path.dirname(__file__), '../crawl4ai-agent'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'crawl4ai-agent'))
 from kafka_publisher import Crawl4AIKafkaPublisher
 
 # Configure logging
