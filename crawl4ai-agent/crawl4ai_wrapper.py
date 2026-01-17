@@ -94,7 +94,19 @@ class Crawl4AIWrapper:
 
     def _sync_generate(self, prompt: str, extra_kwargs: Dict[str, Any]) -> str:
         """Synchronous generation helper for asyncio.to_thread."""
-        response = self.model.generate_content(prompt, **extra_kwargs)
+        # Set max output tokens to ensure full response for large product lists
+        generation_config = genai.GenerationConfig(
+            max_output_tokens=8192,  # Increased to handle large product lists
+            temperature=0.1  # Low temperature for consistent extraction
+        )
+        response = self.model.generate_content(prompt, generation_config=generation_config, **extra_kwargs)
+        
+        # Check if response was truncated
+        if hasattr(response, 'candidates') and response.candidates:
+            finish_reason = response.candidates[0].finish_reason
+            if finish_reason and str(finish_reason) != "STOP" and str(finish_reason) != "1":
+                logger.warning(f"⚠️ LLM response may be truncated! finish_reason={finish_reason}")
+        
         if hasattr(response, "text") and response.text:
             return response.text
         return str(response)
@@ -2359,7 +2371,7 @@ Return ONLY the JSON array, no other text.
             total_chars = len(combined_content)
             logger.info(f"Combined relevant chunks: {total_chars} chars")
             rag_prompt = f"""
-You are an expert data extractor. Use ALL the HTML chunks below to extract structured data.
+You are an expert data extractor. Extract ALL items from the HTML chunks below.
 
 USER REQUEST: "{prompt}"
 
@@ -2369,12 +2381,16 @@ INSTRUCTION:
 HTML CHUNKS (concatenated, separated by '--- END OF CHUNK ---'):
 {combined_content}
 
-RULES:
-1. Extract EVERY unique item that matches the request.
-2. Do NOT duplicate items.
-3. If a field is missing, use null or omit it.
-4. Return ONLY a valid JSON array of objects.
-5. Use consistent field names across all items.
+CRITICAL RULES:
+1. Extract EVERY SINGLE item that matches the request - DO NOT SKIP ANY.
+2. Count all product cards/items in the HTML and extract ALL of them.
+3. If you find 60 products, return exactly 60 products.
+4. Do NOT duplicate items (same name/ID).
+5. If a field is missing, use null.
+6. Return ONLY a valid JSON array.
+7. Use consistent field names across all items.
+
+IMPORTANT: Do not summarize or reduce the count. Extract ALL items completely.
 
 Example:
 [
@@ -2386,13 +2402,17 @@ Return ONLY the JSON array:
 """
 
             logger.info("Calling LLM ONCE with all relevant chunks (RAG-style)...")
+            logger.info(f"📊 EXTRACTION INPUT: {len(relevant_chunks)} chunks, {total_chars} total chars to process")
             response_text = (await self._generate_text(rag_prompt)).strip()
 
             # Parse response
             items = self._parse_llm_response(response_text)
             unique_items = self._deduplicate_items(items)
 
-            logger.info(f"RAG extraction complete: {len(items)} → {len(unique_items)} unique items")
+            logger.info(f"📊 EXTRACTION OUTPUT: LLM returned {len(items)} items → {len(unique_items)} after dedup")
+            if len(items) != len(unique_items):
+                logger.warning(f"⚠️ Deduplication removed {len(items) - len(unique_items)} duplicate items")
+            
             return unique_items
 
         except Exception as e:

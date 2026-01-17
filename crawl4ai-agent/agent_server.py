@@ -3,6 +3,7 @@ crawl4ai Agent FastAPI Server
 Provides intelligent web crawling with Gemini LLM integration
 """
 import os
+import sys
 import uuid
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,8 +14,17 @@ import logging
 from crawl4ai_wrapper import Crawl4AIWrapper
 from kafka_publisher import Crawl4AIKafkaPublisher
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging for Docker - flush immediately and use stdout
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+# Force unbuffered output for Docker
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
