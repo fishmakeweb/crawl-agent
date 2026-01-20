@@ -72,7 +72,7 @@ class CrawlRequest(BaseModel):
     user_id: Optional[str] = None  # For Kafka progress tracking
     navigation_steps: Optional[List[Dict[str, Any]]] = None
     extract_schema: Optional[Dict[str, Any]] = None
-    max_pages: int = 50
+    max_pages: Optional[int] = None  # Null = try prompt extraction, fallback to 50
 
 
 class NavigationResult(BaseModel):

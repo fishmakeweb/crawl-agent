@@ -81,7 +81,7 @@ class CrawlRequest(BaseModel):
     job_id: Optional[str] = None
     user_id: Optional[str] = None
     navigation_steps: Optional[List[Dict[str, Any]]] = None
-    max_pages: int = 50
+    max_pages: Optional[int] = None  # Null = try prompt extraction, fallback to 50
 
 
 class EmbeddingData(BaseModel):

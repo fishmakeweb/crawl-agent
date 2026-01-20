@@ -208,7 +208,7 @@ Answer:
         user_id: Optional[str] = None,
         navigation_steps: Optional[List[Dict]] = None,
         extract_schema: Optional[Dict] = None,
-        max_pages: int = 50
+        max_pages: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Execute intelligent crawl with navigation and extraction
@@ -258,11 +258,19 @@ Answer:
                     specific_pages = analysis_result.get("specific_pages")
                     start_page = analysis_result.get("start_page")
                     
-                    # Override max_pages if user specified a limit in prompt (e.g., "3 trang đầu")
-                    extracted_max_pages = analysis_result.get("extracted_max_pages")
-                    if extracted_max_pages is not None and isinstance(extracted_max_pages, (int, float)):
-                        max_pages = int(extracted_max_pages)
-                        logger.info(f"📊 User specified page limit detected: {max_pages} pages (overriding default)")
+                    # Precedence logic:
+                    # 1. If max_pages is None → UI field was empty → try prompt extraction, fallback to 50
+                    # 2. If max_pages is set (1, 50, 100, etc.) → user explicitly chose it → IGNORE prompt
+                    if max_pages is None:
+                        extracted_max_pages = analysis_result.get("extracted_max_pages")
+                        if extracted_max_pages is not None and isinstance(extracted_max_pages, (int, float)):
+                            max_pages = int(extracted_max_pages)
+                            logger.info(f"📊 User specified page limit in prompt: {max_pages} pages (UI field was empty)")
+                        else:
+                            max_pages = 50  # Default fallback
+                            logger.info(f"📄 Using default max_pages: {max_pages} (no UI value, no prompt extraction)")
+                    else:
+                        logger.info(f"🎯 Using explicit max_pages from UI: {max_pages} (ignoring prompt extraction)")
                     
                     # Handle specific pages request
                     if specific_pages and len(specific_pages) > 0:
