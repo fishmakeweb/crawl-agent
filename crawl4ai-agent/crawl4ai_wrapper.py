@@ -270,11 +270,34 @@ Answer:
                             max_pages = 50  # Default fallback
                             logger.info(f"📄 Using default max_pages: {max_pages} (no UI value, no prompt extraction)")
                     else:
-                        logger.info(f"🎯 Using explicit max_pages from UI: {max_pages} (ignoring prompt extraction)")
+                        # Only log if not in specific pages mode (which would override max_pages anyway)
+                        if not (specific_pages and len(specific_pages) > 0):
+                            logger.info(f"🎯 Using explicit max_pages from UI: {max_pages} (ignoring prompt extraction)")
+                    
+                    # CRITICAL: Override skip_pagination if max_pages > 1 (user wants multiple pages)
+                    if max_pages and max_pages > 1 and not (specific_pages and len(specific_pages) > 0):
+                        if skip_pagination:
+                            logger.info(f"⚠️ AI suggested skip_pagination=True, but max_pages={max_pages} > 1 → forcing pagination ON")
+                            # Inject pagination step since AI didn't include it
+                            pagination_step = {
+                                "action": "paginate",
+                                "description": f"Navigate through {max_pages} pages starting from current page",
+                                "selector": analysis_result.get("pagination_selector", "a[rel='next']"),
+                                "max_pages": max_pages
+                            }
+                            # Insert pagination step BEFORE extraction step
+                            if navigation_steps and navigation_steps[0].get("action") == "extract":
+                                # If first step is extract, insert pagination before it
+                                navigation_steps.insert(0, pagination_step)
+                            else:
+                                # Otherwise add it
+                                navigation_steps.append(pagination_step)
+                            logger.info(f"✅ Injected pagination step: {max_pages} pages")
+                        skip_pagination = False
                     
                     # Handle specific pages request
                     if specific_pages and len(specific_pages) > 0:
-                        logger.info(f"🎯 SPECIFIC PAGES MODE: Will crawl only pages {specific_pages}")
+                        logger.info(f"🎯 SPECIFIC PAGES MODE: Will crawl only pages {specific_pages} (max_pages parameter ignored)")
                         # Generate URLs for specific pages
                         page_urls = await self._generate_specific_page_urls(url, specific_pages, start_page or 1)
                         logger.info(f"📋 Generated {len(page_urls)} URLs for specific pages")

@@ -95,11 +95,12 @@ class SharedCrawlerAgent(_BaseAgent):
                 config.update(domain_patterns[domain])
 
             # Use base crawler directly
+            # max_pages comes from task (UI field), not domain config
             result = await self.base_crawler.intelligent_crawl(
                 url=task["url"],
                 prompt=task.get("user_description", ""),
                 extract_schema=task.get("extraction_schema", {}),
-                max_pages=config.get("max_pages", 50)
+                max_pages=task.get("max_pages")  # None = extract from prompt, int = explicit UI value
             )
 
             # Return success indicator
@@ -141,7 +142,7 @@ class SharedCrawlerAgent(_BaseAgent):
                 url=task["url"],
                 prompt=task.get("user_description", ""),
                 extract_schema=task.get("extraction_schema", {}),
-                max_pages=crawl_config.get("max_pages", 50)
+                max_pages=task.get("max_pages")  # None = extract from prompt, int = explicit UI value
             )
 
             agl.emit_object({
@@ -277,7 +278,7 @@ Return only the number (0.0-1.0).
                 user_id=task.get("user_id"),
                 navigation_steps=task.get("navigation_steps"),
                 extract_schema=task.get("extraction_schema", {}),
-                max_pages=resources.get("crawl_config", {}).get("max_pages", 50)
+                max_pages=task.get("max_pages")  # None = extract from prompt, int = explicit UI value
             )
 
             # Log what will be returned to C# service

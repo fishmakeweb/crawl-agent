@@ -151,6 +151,9 @@ async def crawl(request: CrawlRequest):
     prompt = request.prompt or request.user_description or ""
     extract_schema = request.extract_schema or request.extraction_schema or {}
 
+    # DEBUG: Log received max_pages value
+    logger.info(f"🔍 DEBUG: Received max_pages={request.max_pages} (type: {type(request.max_pages).__name__})")
+
     try:
         if not request.job_id:
             logger.info(f"No job_id provided. Generated {job_id} for request")
