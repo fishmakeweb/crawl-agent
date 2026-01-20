@@ -177,7 +177,8 @@ class Crawl4AIWrapper:
         """
         try:
             # Truncate context if too large (Gemini 2.0 Flash has 1M context, but let's be safe/fast)
-            safe_context = context[:100000] 
+            # Increased from 100KB to 500KB to handle large crawls (e.g., 500 products × 1KB each)
+            safe_context = context[:500000] 
             
             prompt = f"""
 You are a helpful data assistant. Answer the user's question based ONLY on the provided context data.
