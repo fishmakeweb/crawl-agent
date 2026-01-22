@@ -4,6 +4,11 @@ Provides semantic search using Qdrant vector database for product queries.
 
 Flow:
 .NET → gửi data + question → Python → embed data vào Qdrant → query Qdrant → LLM format → trả về
+
+Updated Flow (with Code Generation):
+1. Classify query (computational vs non-computational)
+2. Computational → CodeGeneratorService → accurate numerical results
+3. Non-computational → traditional RAG path
 """
 import os
 import json
@@ -21,6 +26,14 @@ from qdrant_client.http.models import (
 
 import google.generativeai as genai
 
+# Import simplified unified SmartRAG module
+try:
+    from smart_rag import SmartRAG, get_smart_rag
+    SMART_RAG_AVAILABLE = True
+except ImportError as e:
+    SMART_RAG_AVAILABLE = False
+    logger.warning(f"SmartRAG not available: {e}")
+
 logger = logging.getLogger(__name__)
 
 # Constants
@@ -37,10 +50,10 @@ class QdrantRAGService:
     Flow:
     1. Receive context data (JSON products) from .NET
     2. Parse products and create text representations
-    3. Embed each product using Google's embedding model
-    4. Store in Qdrant collection (temporary, per session)
-    5. Query using semantic search
-    6. Return relevant products for LLM to answer
+    3. Classify query (computational vs non-computational)
+    4a. Computational → CodeGeneratorService (accurate calculations)
+    4b. Non-computational → Embed + semantic search
+    5. Return relevant products for LLM to answer
     """
     
     def __init__(self, qdrant_host: str = None, qdrant_port: int = None):
@@ -61,7 +74,11 @@ class QdrantRAGService:
             raise ValueError("GEMINI_API_KEY environment variable not set")
         genai.configure(api_key=api_key)
         
+        # Simplified SmartRAG component (lazy initialization)
+        self._smart_rag: Optional[SmartRAG] = None
+        
         logger.info(f"QdrantRAGService initialized: {self.qdrant_host}:{self.qdrant_port}")
+        logger.info(f"SmartRAG available: {SMART_RAG_AVAILABLE}")
     
     def _generate_collection_name(self, session_id: str = None) -> str:
         """Generate unique collection name for this session."""
@@ -391,255 +408,70 @@ class QdrantRAGService:
         gemini_client = None
     ) -> str:
         """
-        Full RAG pipeline: index → search → generate answer.
+        Simplified RAG pipeline using unified SmartRAG module.
+        
+        Simplified Flow (3 lines of code):
+        1. Parse products from context
+        2. Call SmartRAG.process_query() → handles everything
+        3. Return formatted result
+        
+        NO keyword matching, NO branching, NO complexity.
+        Single unified SmartRAG handles: analysis + code generation + execution + formatting.
         
         Args:
             context: JSON string with products/data
             query: User's question
             session_id: Optional session ID
-            gemini_model: Gemini model for text generation (legacy, deprecated)
-            gemini_client: GeminiClient instance (preferred - supports multiple providers)
+            gemini_model: Gemini model (legacy, deprecated)
+            gemini_client: GeminiClient instance (required)
             
         Returns:
-            Natural language answer
+            Natural language answer or structured data (JSON for charts)
         """
         try:
-            # Step 1: Index context data
-            collection_name, product_count = await self.index_context(context, session_id)
+            # Step 1: Parse products from context
+            products = self._parse_products(context)
             
-            if product_count == 0:
+            if not products:
                 return "Không tìm thấy sản phẩm nào trong dữ liệu đã crawl."
             
-            # Step 2: Search for relevant products (get ALL indexed products for listing queries)
-            # Use product_count as top_k to ensure we retrieve all items
-            search_limit = min(product_count, TOP_K_RESULTS)  # Use actual count or max limit
-            relevant_products = await self.search(collection_name, query, top_k=search_limit)
+            logger.info(f"📦 Parsed {len(products)} products from context")
             
-            if not relevant_products:
-                return "Không tìm thấy thông tin liên quan trong dữ liệu đã crawl."
+            # Ensure LLM client is available
+            if not gemini_client:
+                logger.error("❌ No LLM client provided")
+                return "Lỗi: Không có LLM client để xử lý câu hỏi."
             
-            # Step 3: Build context from relevant products
-            rag_context_parts = []
-            rag_context_parts.append(f"TỔNG SỐ SẢN PHẨM ĐÃ CRAWL: {product_count}")
-            rag_context_parts.append("")
-            rag_context_parts.append("SẢN PHẨM LIÊN QUAN (từ semantic search):")
+            # Check if SmartRAG is available
+            if not SMART_RAG_AVAILABLE:
+                logger.error("❌ SmartRAG module not available")
+                return "Lỗi: Hệ thống SmartRAG chưa được cài đặt."
             
-            # Pre-count brands for accurate visualization
-            import re
-            brand_counts = {}
-            products_without_brand = []
+            # Step 2: Initialize SmartRAG (lazy)
+            if self._smart_rag is None:
+                self._smart_rag = get_smart_rag(llm_client=gemini_client)
+                logger.info("✅ SmartRAG initialized")
             
-            for i, product in enumerate(relevant_products):
-                rag_context_parts.append(f"\n[Sản phẩm {i+1}, Độ liên quan: {product['score']:.2f}]")
-                rag_context_parts.append(product['text'])
-                
-                brand_found = False
-                brand = None
-                
-                # Try to get brand from product_data first
-                if product['product_data']:
-                    rag_context_parts.append(f"Raw data: {json.dumps(product['product_data'], ensure_ascii=False)}")
-                    
-                    pdata = product['product_data']
-                    if isinstance(pdata, dict):
-                        brand = pdata.get('brand') or pdata.get('Brand') or pdata.get('thuong_hieu') or pdata.get('Thương hiệu')
-                    
-                    if brand and isinstance(brand, str) and brand.strip():
-                        brand = brand.strip()
-                        brand_counts[brand] = brand_counts.get(brand, 0) + 1
-                        brand_found = True
-                
-                # If no brand from product_data, try regex on text
-                if not brand_found and product['text']:
-                    text = product['text']
-                    # Try multiple patterns to extract brand (both with and without Vietnamese diacritics)
-                    patterns = [
-                        r'Thương hiệu[:\s]+([^\n\|,]+)',  # "Thương hiệu: XXX" (with diacritics)
-                        r'Thuong hieu[:\s]+([^\n\|,]+)',  # "Thuong hieu: XXX" (without diacritics)
-                        r'\|\s*Thương hiệu[:\s]*([^\n\|]+)\s*\|',  # "| Thương hiệu: XXX |"
-                        r'\|\s*Thuong hieu[:\s]*([^\n\|]+)\s*\|',  # "| Thuong hieu: XXX |"
-                        r'Brand[:\s]+([^\n\|,]+)',  # "Brand: XXX"
-                        r'Nhãn hiệu[:\s]+([^\n\|,]+)',  # "Nhãn hiệu: XXX"
-                        r'Nhan hieu[:\s]+([^\n\|,]+)',  # "Nhan hieu: XXX"
-                    ]
-                    
-                    for pattern in patterns:
-                        brand_match = re.search(pattern, text, re.IGNORECASE)
-                        if brand_match:
-                            brand = brand_match.group(1).strip()
-                            if brand:
-                                brand_counts[brand] = brand_counts.get(brand, 0) + 1
-                                brand_found = True
-                                break
-                
-                if not brand_found:
-                    products_without_brand.append(i + 1)
+            # Step 3: Process query with SmartRAG (handles everything)
+            logger.info(f"🚀 Processing query with SmartRAG: {query[:50]}...")
             
-            # Log for debugging
-            logger.info(f"📊 Brand counting: {len(relevant_products)} products processed")
-            logger.info(f"📊 Brands found: {len(brand_counts)} unique brands")
-            logger.info(f"📊 Brand counts: {brand_counts}")
-            logger.info(f"📊 Total counted: {sum(brand_counts.values())}")
-            if products_without_brand:
-                logger.warning(f"📊 Products without brand: {products_without_brand[:10]}...")  # Show first 10
+            code_result = await self._smart_rag.process_query(
+                query=query,
+                products=products
+            )
             
-            rag_context = "\n".join(rag_context_parts)
+            if not code_result.success:
+                logger.error(f"❌ SmartRAG failed: {code_result.error}")
+                return code_result.display_text  # Error message
             
-            # Step 4: Generate answer with Gemini
+            logger.info(f"✅ SmartRAG success: {code_result.format_type}, "
+                       f"time={code_result.execution_time_ms:.0f}ms")
             
-            # Detect visualization request
-            viz_keywords = ['vẽ biểu đồ', 've bieu do', 'chart', 'graph', 'visualization', 'visualize', 'tạo biểu đồ', 'tao bieu do']
-            is_viz_request = any(keyword in query.lower() for keyword in viz_keywords)
-            
-            if is_viz_request:
-                # Detect chart type from query
-                query_lower = query.lower()
-                if any(kw in query_lower for kw in ['tròn', 'pie', 'donut', 'doughnut']):
-                    suggested_chart_type = "pie"
-                elif any(kw in query_lower for kw in ['đường', 'line', 'trend']):
-                    suggested_chart_type = "line"
-                else:
-                    suggested_chart_type = "bar"
-                
-                # Check if query is about brands/thương hiệu and we have pre-counted data
-                is_brand_query = any(kw in query_lower for kw in ['thương hiệu', 'thuong hieu', 'brand', 'nhãn hiệu', 'nhan hieu'])
-                
-                if is_brand_query and brand_counts:
-                    # Sort by count descending
-                    sorted_brands = sorted(brand_counts.items(), key=lambda x: x[1], reverse=True)
-                    labels = [b[0] for b in sorted_brands]
-                    data = [b[1] for b in sorted_brands]
-                    total_counted = sum(data)
-                    
-                    # Generate chart JSON directly from pre-counted data
-                    chart_json = {
-                        "chart_type": suggested_chart_type,
-                        "data": data,
-                        "labels": labels
-                    }
-                    
-                    logger.info(f"📊 Pre-counted brand data: {len(brand_counts)} brands, {total_counted} products")
-                    logger.info(f"📊 Brand counts: {brand_counts}")
-                    
-                    # Build response with pre-counted accurate data
-                    prompt = f"""Bạn là trợ lý AI. Dữ liệu đã được đếm chính xác bằng code:
-
-**TỔNG SỐ SẢN PHẨM:** {product_count}
-**SỐ THƯƠNG HIỆU:** {len(brand_counts)}
-
-**THỐNG KÊ CHÍNH XÁC THEO THƯƠNG HIỆU (đã đếm bằng code):**
-{json.dumps(brand_counts, ensure_ascii=False, indent=2)}
-
-CÂU HỎI: {query}
-
-**BẮT BUỘC:** Trả về summary ngắn gọn + JSON chính xác sau:
-
-{json.dumps(chart_json, ensure_ascii=False)}
-
-Ví dụ output:
-Dựa trên {total_counted} sản phẩm từ {len(brand_counts)} thương hiệu, phân bố như sau:
-
-{json.dumps(chart_json, ensure_ascii=False)}"""
-                else:
-                    # Fallback: Let LLM analyze (less accurate)
-                    prompt = f"""Bạn là trợ lý AI chuyên phân tích và visualize dữ liệu sản phẩm.
-
-{rag_context}
-
-CÂU HỎI: {query}
-
-**BẮT BUỘC: Trả về JSON với định dạng:**
-
-```json
-{{
-  "chart_type": "{suggested_chart_type}",
-  "data": [số1, số2, số3, ...],
-  "labels": ["label1", "label2", "label3", ...]
-}}
-```
-
-**HƯỚNG DẪN:**
-1. Đếm CHÍNH XÁC từng sản phẩm theo tiêu chí được yêu cầu
-2. KHÔNG được ước lượng - phải đếm từng item một
-3. Kiểm tra lại tổng = {product_count}
-4. **BẮT BUỘC** return JSON với chart_type, data, labels
-
-**BẮT BUỘC: JSON phải có đủ 3 fields: chart_type, data, labels. KHÔNG có comments trong JSON.**"""
-            else:
-                # Normal prompt for non-visualization queries
-                # Detect if this is a listing request
-                list_keywords = ['liệt kê', 'liet ke', 'list', 'danh sách', 'danh sach', 'tất cả', 'tat ca', 'all', 'toàn bộ', 'toan bo', 'đầy đủ', 'day du', 'full']
-                is_listing_request = any(keyword in query.lower() for keyword in list_keywords)
-                
-                if is_listing_request:
-                    prompt = f"""Bạn là trợ lý AI chuyên phân tích dữ liệu sản phẩm đã được crawl.
-
-**DỮ LIỆU SẢN PHẨM:**
-{rag_context}
-
-**CÂU HỎI:** {query}
-
-**CHỈ THỊ BẮT BUỘC:**
-1. LIỆT KÊ TẤT CẢ {product_count} SẢN PHẨM NGAY LẬP TỨC
-2. KHÔNG ĐƯỢC hỏi xác nhận, không được viết "Hãy xác nhận", "có muốn xem tiếp không"
-3. KHÔNG ĐƯỢC viết "Do độ dài...", "Quá dài...", "Tiếp tục nếu..."
-4. KHÔNG ĐƯỢC dừng giữa chừng - PHẢI liệt kê từ sản phẩm #1 đến #{product_count}
-5. Format: **[Số thứ tự]. [Tên sản phẩm]** | Thương hiệu: [Brand] | Giá: [Price]₫
-6. BẮT ĐẦU NGAY với sản phẩm #1, KẾT THÚC với sản phẩm #{product_count}
-
-**BẮT ĐẦU LIỆT KÊ:**
-"""
-                else:
-                    prompt = f"""Bạn là trợ lý AI chuyên phân tích dữ liệu sản phẩm đã được crawl.
-Hãy trả lời câu hỏi dựa trên dữ liệu được cung cấp.
-
-{rag_context}
-
-CÂU HỎI: {query}
-
-HƯỚNG DẪN:
-1. Phân tích kỹ dữ liệu để tìm câu trả lời chính xác
-2. Nếu câu hỏi yêu cầu TÍNH TOÁN (đếm số lượng, tính trung bình, tổng, max, min):
-   - SỬ DỤNG "TỔNG SỐ SẢN PHẨM ĐÃ CRAWL" cho câu hỏi đếm tổng
-   - Thực hiện phép tính dựa trên dữ liệu sản phẩm
-   - Đưa ra kết quả số cụ thể
-3. Nếu không tìm thấy thông tin, hãy nói rõ
-4. Trả lời bằng tiếng Việt, chính xác và chi tiết
-
-CÂU TRẢ LỜI:"""
-
-            # Step 4: Generate answer using available LLM
-            # Priority: gemini_client (multi-provider) > gemini_model (legacy) > direct Gemini
-            if gemini_client:
-                # Use GeminiClient which supports multiple providers via adapter
-                logger.info("Generating answer via GeminiClient (multi-provider)")
-                answer = await gemini_client.generate(prompt)
-                
-                # DEBUG: Log answer length and preview for visualization queries
-                if is_viz_request:
-                    logger.info(f"📊 Visualization answer length: {len(answer)} chars")
-                    logger.info(f"📊 Answer preview (first 500 chars): {answer[:500]}")
-                    logger.info(f"📊 Answer preview (last 200 chars): {answer[-200:]}")
-                    
-            elif gemini_model:
-                import asyncio
-                response = await asyncio.to_thread(
-                    gemini_model.generate_content, prompt
-                )
-                answer = response.text if hasattr(response, 'text') else str(response)
-            else:
-                # Fallback to direct Gemini call
-                model = genai.GenerativeModel("models/gemini-2.0-flash")
-                response = model.generate_content(prompt)
-                answer = response.text if hasattr(response, 'text') else str(response)
-            
-            # Step 5: Cleanup collection
-            self._delete_collection(collection_name)
-            
-            return answer
+            # Step 4: Return formatted result
+            return code_result.display_text
             
         except Exception as e:
-            logger.error(f"RAG pipeline failed: {e}", exc_info=True)
+            logger.error(f"❌ Simplified RAG pipeline failed: {e}", exc_info=True)
             return f"Lỗi khi xử lý câu hỏi: {str(e)}"
     
     def cleanup_old_collections(self, max_age_hours: int = 24) -> int:

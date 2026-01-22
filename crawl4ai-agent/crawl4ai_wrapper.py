@@ -1303,8 +1303,8 @@ Return a JSON array of objects. Each object should contain relevant fields.
 
 Example format:
 [
-  {{"product_name": "iPhone 15 Pro", "price_usd": 999.99, "brand": "Apple"}},
-  {{"product_name": "iPhone 15", "price_usd": 799.99, "brand": "Apple"}}
+  {{"product_name": "iPhone 15 Pro", "price": 999.99, "brand": "Apple"}},
+  {{"product_name": "iPhone 15", "price": 799.99, "brand": "Apple"}}
 ]
 
 Return ONLY the JSON array, no other text.
@@ -2284,8 +2284,8 @@ Return a JSON array of objects. Each object should contain:
 
 Example format:
 [
-  {{"product_name": "iPhone 15 Pro", "price_usd": 999.99, "brand": "Apple", "category": "Electronics"}},
-  {{"product_name": "iPhone 15", "price_usd": 799.99, "brand": "Apple", "category": "Electronics"}}
+  {{"product_name": "iPhone 15 Pro", "price": 999.99, "brand": "Apple", "category": "Electronics"}},
+  {{"product_name": "iPhone 15", "price": 799.99, "brand": "Apple", "category": "Electronics"}}
 ]
 
 Return ONLY the JSON array, no other text.
