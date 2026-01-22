@@ -19,11 +19,11 @@ services:
       - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash}
-      - EXTERNAL_LLM_BASE_URL=${EXTERNAL_LLM_BASE_URL}
-      - EXTERNAL_LLM_API_KEY=${EXTERNAL_LLM_API_KEY}
-      - EXTERNAL_LLM_MODEL_NAME=${EXTERNAL_LLM_MODEL_NAME}
-      - EXTERNAL_EMBEDDING_MODEL=${EXTERNAL_EMBEDDING_MODEL}
-      - EXTERNAL_EMBEDDING_DIMENSION=${EXTERNAL_EMBEDDING_DIMENSION}
+      - EXTERNAL_LLM_BASE_URL=${EXTERNAL_LLM_BASE_URL:-}
+      - EXTERNAL_LLM_API_KEY=${EXTERNAL_LLM_API_KEY:-}
+      - EXTERNAL_LLM_MODEL_NAME=${EXTERNAL_LLM_MODEL_NAME:-}
+      - EXTERNAL_EMBEDDING_MODEL=${EXTERNAL_EMBEDDING_MODEL:-}
+      - EXTERNAL_EMBEDDING_DIMENSION=${EXTERNAL_EMBEDDING_DIMENSION:-1536}
       # Pagination Detection Configuration
       - PAGINATION_DETECTION_MODEL=${PAGINATION_DETECTION_MODEL:-models/gemini-2.0-flash-exp}
       - MIN_PAGINATION_CONFIDENCE=${MIN_PAGINATION_CONFIDENCE:-0.7}
@@ -36,11 +36,17 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
       - KAFKA_ENABLED=${KAFKA_ENABLED:-true}
       - KAFKA_CLIENT_ID=${KAFKA_CLIENT_ID:-crawl4ai-agent}
+      # Qdrant Configuration (for RAG queries)
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - USE_QDRANT_RAG=${USE_QDRANT_RAG:-true}
     volumes:
       - ./frozen_resources:/app/frozen_resources:ro
       - ./crawl4ai-agent:/app/crawl4ai-agent:ro
+      - ./knowledge:/app/knowledge:ro
     networks:
       - selflearning-network
+    # Note: qdrant should be started separately or via full docker-compose up
     # Link to Kafka container with alias so "host.docker.internal" resolves to Kafka
     # This is set by connect-kafka.sh which updates KAFKA_CONTAINER_NAME in .env
     external_links:

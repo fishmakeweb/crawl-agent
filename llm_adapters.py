@@ -109,23 +109,26 @@ class GeminiAdapter(LLMAdapter):
     ) -> LLMResponse:
         """Generate text using Gemini"""
         try:
-            # Handle JSON mode
-            generation_config = None
-            if kwargs.get("response_mime_type") or kwargs.get("json_mode"):
-                generation_config = self.genai.GenerationConfig(
-                    response_mime_type="application/json"
-                )
-                kwargs.pop("json_mode", None)
+            # Build generation config with max_output_tokens
+            # Gemini 1.5 Pro supports up to 65536 output tokens
+            generation_config_params = {
+                "max_output_tokens": kwargs.pop("max_tokens", 65536)  # Max for Gemini 1.5 Pro
+            }
             
-            # Generate content
-            if generation_config:
-                response = await self.model.generate_content_async(
-                    prompt,
-                    generation_config=generation_config,
-                    **kwargs
-                )
-            else:
-                response = await self.model.generate_content_async(prompt, **kwargs)
+            # Handle JSON mode
+            if kwargs.get("response_mime_type") or kwargs.get("json_mode"):
+                generation_config_params["response_mime_type"] = "application/json"
+                kwargs.pop("json_mode", None)
+                kwargs.pop("response_mime_type", None)
+            
+            generation_config = self.genai.GenerationConfig(**generation_config_params)
+            
+            # Generate content with config
+            response = await self.model.generate_content_async(
+                prompt,
+                generation_config=generation_config,
+                **kwargs
+            )
             
             return LLMResponse(
                 text=response.text,

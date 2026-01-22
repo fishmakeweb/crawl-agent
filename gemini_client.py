@@ -532,10 +532,14 @@ Return as JSON only.
                 
                 # Handle special parameters
                 kwargs = {}
+                generation_config_params = {
+                    "max_output_tokens": 32000  # Increased for large responses like 200 product listings
+                }
+                
                 if input_data.get("json_mode"):
-                    kwargs["generation_config"] = genai.GenerationConfig(
-                        response_mime_type="application/json"
-                    )
+                    generation_config_params["response_mime_type"] = "application/json"
+                
+                kwargs["generation_config"] = genai.GenerationConfig(**generation_config_params)
                 
                 # Make API call
                 response = await model_instance.generate_content_async(prompt, **kwargs)

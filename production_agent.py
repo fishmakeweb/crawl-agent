@@ -115,6 +115,7 @@ class QueryRequest(BaseModel):
     """Request for RAG query"""
     context: str
     query: str
+    session_id: Optional[str] = None  # For Qdrant collection naming
 
 
 class SummaryRequest(BaseModel):
@@ -285,10 +286,14 @@ async def get_stats():
 
 @app.post("/query")
 async def answer_query(request: QueryRequest):
-    """Answer a question based on provided context (RAG)"""
+    """Answer a question based on provided context using Qdrant RAG + LLM"""
     try:
-        # Use agent's base crawler for query answering
-        answer = await agent.base_crawler.answer_query(request.context, request.query)
+        # Use agent's base crawler for query answering (now with Qdrant RAG)
+        answer = await agent.base_crawler.answer_query(
+            request.context, 
+            request.query,
+            session_id=request.session_id
+        )
         return {"answer": answer}
     except Exception as e:
         logger.error(f"Query failed: {str(e)}")

@@ -164,42 +164,74 @@ class Crawl4AIWrapper:
             logger.warning(f"Shared client doesn't support model override, using default model instead of {model_override}")
             return await self.gemini_client.generate(prompt, **kwargs)
 
-    async def answer_query(self, context: str, query: str) -> str:
+    async def answer_query(self, context: str, query: str, session_id: str = None) -> str:
         """
-        Answer a question based on provided context using Gemini (RAG).
+        Answer a question based on provided context using Qdrant RAG + Gemini.
+        
+        Flow:
+        1. Index context data into Qdrant (semantic embeddings)
+        2. Search Qdrant for relevant products based on query
+        3. Send relevant products + query to Gemini for answer
         
         Args:
             context: JSON or text context from previous crawls
             query: User's question
+            session_id: Optional session ID for Qdrant collection naming
             
         Returns:
             Natural language answer
         """
         try:
-            # Truncate context if too large (Gemini 2.0 Flash has 1M context, but let's be safe/fast)
-            # Increased from 100KB to 500KB to handle large crawls (e.g., 500 products × 1KB each)
+            # Try using Qdrant RAG if available
+            use_qdrant = os.getenv("USE_QDRANT_RAG", "true").lower() == "true"
+            
+            if use_qdrant:
+                try:
+                    # Import here to avoid circular imports
+                    import sys
+                    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'knowledge'))
+                    from qdrant_rag_service import get_rag_service
+                    
+                    rag_service = get_rag_service()
+                    if rag_service:
+                        logger.info(f"Using Qdrant RAG for query: {query[:100]}...")
+                        return await rag_service.answer_with_rag(
+                            context=context,
+                            query=query,
+                            session_id=session_id,
+                            gemini_model=self.model,
+                            gemini_client=self.gemini_client  # Pass GeminiClient for multi-provider support
+                        )
+                except Exception as e:
+                    logger.warning(f"Qdrant RAG failed, falling back to direct Gemini: {e}")
+            
+            # Fallback: Direct Gemini call (no semantic search)
+            logger.info("Using direct Gemini RAG (no Qdrant)")
             safe_context = context[:500000] 
             
-            prompt = f"""
-You are a helpful data assistant. Answer the user's question based ONLY on the provided context data.
+            prompt = f"""Bạn là trợ lý AI chuyên phân tích dữ liệu sản phẩm.
+Hãy trả lời câu hỏi dựa HOÀN TOÀN trên dữ liệu được cung cấp.
 
-CONTEXT DATA (JSON/Text):
+DỮ LIỆU (JSON/Text):
 {safe_context}
 
-USER QUESTION: "{query}"
+CÂU HỎI: "{query}"
 
-INSTRUCTIONS:
-1. Analyze the context data to find the answer.
-2. If the answer is found, provide a clear, concise summary.
-3. If the answer is NOT in the context, say "I cannot find that information in the crawled data."
-4. Do not hallucinate information not present in the context.
+HƯỚNG DẪN:
+1. Phân tích kỹ dữ liệu để tìm câu trả lời chính xác
+2. Nếu câu hỏi yêu cầu TÍNH TOÁN (đếm số lượng, tính trung bình, tổng, max, min):
+   - Thực hiện phép tính dựa trên dữ liệu
+   - Đưa ra kết quả số cụ thể
+3. Nếu câu hỏi yêu cầu LIỆT KÊ:
+   - Liệt kê rõ ràng với format dễ đọc
+4. Nếu không tìm thấy thông tin, hãy nói rõ
+5. Trả lời bằng tiếng Việt, ngắn gọn và chính xác
 
-Answer:
-"""
+CÂU TRẢ LỜI:"""
             return await self._generate_text(prompt)
         except Exception as e:
             logger.error(f"Query answer failed: {str(e)}", exc_info=True)
-            return "Sorry, I encountered an error analyzing the data."
+            return f"Xin lỗi, đã xảy ra lỗi khi phân tích dữ liệu: {str(e)}"
 
     async def intelligent_crawl(
         self,
