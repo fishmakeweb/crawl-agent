@@ -16,6 +16,7 @@ import os
 import time
 import logging
 from functools import wraps
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -216,8 +217,9 @@ class HybridKnowledgeStore:
                 )]
             )
 
-            # 2. Graph store: relationships
-            await self._store_in_graph(pattern)
+            # 2. Graph store: relationships (only if available)
+            if self.graph_available:
+                await self._store_in_graph(pattern)
 
             # 3. Cache: if high frequency
             if pattern.get("frequency", 1) > 5:
@@ -262,24 +264,52 @@ class HybridKnowledgeStore:
 
         self.metrics["cache_misses"] += 1
 
-        # Tier 2: Vector search
+        # Tier 2: Vector search (using HTTP REST API for compatibility)
         query_embedding = await self._embed_query(query)
 
-        search_results = self.vector_store.query_points(
-            collection_name=self.collection_name,
-            query=query_embedding,
-            limit=top_k,
-            score_threshold=self.config.SIMILARITY_THRESHOLD
-        ).points
+        try:
+            # Use REST API directly (compatible with Qdrant 1.7.x)
+            search_url = f"http://{self.config.QDRANT_HOST}:{self.config.QDRANT_PORT}/collections/{self.collection_name}/points/search"
+            
+            search_body = {
+                "vector": query_embedding,
+                "limit": top_k,
+                "score_threshold": self.config.SIMILARITY_THRESHOLD,
+                "with_payload": True
+            }
+            
+            response = requests.post(search_url, json=search_body, timeout=10)
+            
+            if response.status_code != 200:
+                logger.error(f"❌ Qdrant search failed: {response.status_code} - {response.text}")
+                return []
+            
+            data = response.json()
+            results_list = data.get("result", [])
+            
+            patterns = []
+            for hit in results_list:
+                payload = hit.get("payload", {})
+                patterns.append({
+                    **payload,
+                    "id": hit.get("id"),
+                    "score": hit.get("score", 0)
+                })
+            
+            logger.info(f"🔍 Vector search found {len(patterns)} patterns (threshold={self.config.SIMILARITY_THRESHOLD})")
+            
+        except Exception as e:
+            logger.error(f"❌ Vector search error: {e}")
+            return []
 
-        patterns = [
-            {**hit.payload, "id": hit.id, "score": hit.score}
-            for hit in search_results
-        ]
-
-        # Tier 3: Graph enrichment
-        if query.get("include_related", True) and patterns:
+        # Tier 3: Graph enrichment (only if Neo4j available)
+        if self.graph_available and query.get("include_related", True) and patterns:
+            logger.info(f"🔗 Enriching with Neo4j graph relationships...")
             patterns = await self._enrich_with_graph(patterns, query)
+        elif not self.graph_available:
+            logger.info(f"⚠️  Skipping graph enrichment (Neo4j unavailable)")
+        else:
+            logger.info(f"ℹ️  Skipping graph enrichment (no patterns or disabled)")
 
         # Cache the result
         self.cache.setex(cache_key, self.cache_ttl, json.dumps(patterns))
@@ -340,6 +370,7 @@ class HybridKnowledgeStore:
             return patterns
 
         pattern_ids = [p["id"] for p in patterns]
+        logger.info(f"🔗 Neo4j: Searching for patterns related to {len(pattern_ids)} found patterns...")
 
         with self.graph_store.session() as session:
             # Find related patterns through graph traversal
@@ -363,11 +394,18 @@ class HybridKnowledgeStore:
             """, ids=pattern_ids)
 
             related_ids = set()
+            similar_count = 0
+            domain_count = 0
+            
             for record in result:
                 if record["similar_id"]:
                     related_ids.add(record["similar_id"])
+                    similar_count += 1
                 if record["domain_id"]:
                     related_ids.add(record["domain_id"])
+                    domain_count += 1
+            
+            logger.info(f"🔗 Neo4j: Found {similar_count} SIMILAR_TO, {domain_count} domain-related → {len(related_ids)} unique patterns")
 
             # Fetch related patterns from vector store
             if related_ids:
