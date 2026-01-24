@@ -189,21 +189,146 @@ class SharedCrawlerAgent(_BaseAgent):
             return 0.0
 
     def _validate_extraction(self, extracted: list, schema: dict) -> float:
-        """Validate against schema"""
-        if not schema or not extracted:
-            return 1.0 if extracted else 0.0
-
+        """
+        Validate extraction quality with multi-dimensional scoring
+        Returns score 0.0-1.0 based on:
+        - Schema compliance
+        - Data completeness
+        - Data quality
+        """
+        if not extracted:
+            logger.debug("⚠️  Validation: No data extracted")
+            return 0.0
+        
+        # If no schema provided, infer basic quality from extracted data
+        if not schema or not schema.get("required"):
+            logger.warning(f"⚠️  Validation: No schema provided - inferring from {len(extracted)} items")
+            return self._infer_quality_without_schema(extracted)
+        
         required = schema.get("required", [])
-        if not required:
-            return 1.0
-
-        # Check if extracted items have required fields
-        valid_items = 0
+        logger.debug(f"Validating {len(extracted)} items against schema with {len(required)} required fields: {required}")
+        
+        total_score = 0.0
+        
         for item in extracted:
-            if all(field in item and item[field] for field in required):
-                valid_items += 1
-
-        return valid_items / len(extracted) if extracted else 0.0
+            item_score = 0.0
+            
+            # 1. Field presence (40%)
+            fields_present = sum(1 for field in required if field in item)
+            field_presence_score = fields_present / len(required)
+            
+            # 2. Field completeness (30%) - non-null, non-empty values
+            fields_complete = sum(
+                1 for field in required 
+                if field in item and item[field] not in [None, "", [], {}]
+            )
+            completeness_score = fields_complete / len(required)
+            
+            # 3. Data quality (30%) - type correctness, reasonable values
+            quality_score = self._assess_data_quality(item, required)
+            
+            item_score = (
+                field_presence_score * 0.4 +
+                completeness_score * 0.3 +
+                quality_score * 0.3
+            )
+            
+            total_score += item_score
+        
+        return total_score / len(extracted)
+    
+    def _infer_quality_without_schema(self, extracted: list) -> float:
+        """
+        Infer data quality when no schema is provided
+        - Check completeness of fields (no null/empty)
+        - Check data diversity (not all same values)
+        - Penalize for missing schema (max 0.85)
+        """
+        if not extracted:
+            return 0.0
+        
+        total_score = 0.0
+        
+        for item in extracted:
+            if not isinstance(item, dict) or not item:
+                continue
+            
+            fields = list(item.keys())
+            if not fields:
+                continue
+            
+            # 1. Completeness: How many fields have non-null values? (50%)
+            non_null_fields = sum(
+                1 for field in fields
+                if item[field] not in [None, "", [], {}]
+            )
+            completeness = non_null_fields / len(fields)
+            
+            # 2. Quality assessment on common fields (50%)
+            quality = self._assess_data_quality(item, fields)
+            
+            item_score = completeness * 0.5 + quality * 0.5
+            total_score += item_score
+        
+        avg_score = total_score / len(extracted)
+        
+        # Penalize for missing schema: max 0.85 instead of 1.0
+        # This encourages users to provide schemas
+        return min(0.85, avg_score)
+    
+    def _assess_data_quality(self, item: dict, required_fields: list) -> float:
+        """
+        Assess data quality of extracted item
+        - String fields should not be generic ("N/A", "null", etc.)
+        - Numeric fields should be valid numbers
+        - Dates should be parseable
+        """
+        quality_checks = 0
+        total_checks = 0
+        
+        for field in required_fields:
+            if field not in item:
+                continue
+            
+            value = item[field]
+            total_checks += 1
+            
+            # Skip None/empty
+            if value in [None, "", [], {}]:
+                continue
+            
+            field_lower = field.lower()
+            
+            # Price/cost fields should be numeric and positive
+            if any(indicator in field_lower for indicator in ["price", "cost", "amount"]):
+                try:
+                    num_value = float(str(value).replace("$", "").replace(",", ""))
+                    if num_value > 0:
+                        quality_checks += 1
+                except:
+                    pass  # Invalid number
+            
+            # Rating fields should be in valid range
+            elif "rating" in field_lower or "stars" in field_lower:
+                try:
+                    rating = float(value)
+                    if 0 <= rating <= 5:  # Assume 5-star scale
+                        quality_checks += 1
+                except:
+                    pass
+            
+            # Generic string quality check
+            elif isinstance(value, str):
+                # Avoid generic placeholders
+                if value.lower() not in ["n/a", "null", "none", "unknown", "undefined", ""]:
+                    if len(value) > 1:  # At least 2 chars
+                        quality_checks += 1
+            
+            # Any other type with non-None value
+            else:
+                quality_checks += 1
+        
+        return quality_checks / total_checks if total_checks > 0 else 0.5
 
     async def _assess_improvement(self, previous_feedback: str,
                                   current_extraction: list) -> float:
@@ -229,36 +354,195 @@ Return only the number (0.0-1.0).
 
     def _calculate_base_reward(self, crawl_result: dict,
                               extracted: list, validation: float) -> float:
-        """Calculate base reward"""
-
+        """
+        Calculate comprehensive reward score (0.0 - 1.0)
+        
+        Components:
+        - Success (25%): Did the crawl complete without errors?
+        - Data Presence (15%): Was data extracted?
+        - Validation (30%): How well does data match schema?
+        - Quantity (15%): Sufficient items extracted?
+        - Efficiency (15%): Pagination-aware performance (time per page)
+        """
+        
+        # 1. Success component (25%)
         success = 1.0 if crawl_result.get("success") else 0.0
+        
+        # 2. Data presence (15%)
         has_data = 1.0 if extracted else 0.0
-        no_errors = 1.0 if not crawl_result.get("error") else 0.5
-
-        # Quantity bonus (diminishing returns)
-        quantity_bonus = min(1.0, len(extracted) / 10) * 0.2
-
-        return (
-            success * 0.3 +
-            has_data * 0.2 +
-            validation * 0.3 +
-            no_errors * 0.2 +
-            quantity_bonus * 0.1
+        
+        # 3. Validation score (30%) - from _validate_extraction
+        # Already includes schema compliance, completeness, and quality
+        
+        # 4. Quantity component (15%) - diminishing returns
+        if extracted:
+            # Different thresholds based on pattern type
+            metadata = crawl_result.get("metadata", {})
+            
+            # Infer expected quantity from extraction type
+            # E.g., product lists should have 10+, articles might have 1-5
+            if "product" in str(crawl_result.get("conversation_name", "")).lower():
+                target_count = 10  # E-commerce usually has many products
+            elif "article" in str(crawl_result.get("conversation_name", "")).lower():
+                target_count = 5   # Articles are fewer per page
+            else:
+                target_count = 5   # Default
+            
+            quantity_score = min(1.0, len(extracted) / target_count)
+        else:
+            quantity_score = 0.0
+        
+        # 5. Efficiency score (15%) - PAGINATION-AWARE performance
+        no_errors = 1.0 if not crawl_result.get("error") else 0.0
+        
+        # Calculate time efficiency based on pages crawled
+        exec_time = crawl_result.get("execution_time_ms", 0)
+        navigation_result = crawl_result.get("navigation_result", {})
+        pages_collected = max(1, navigation_result.get("pages_collected", 1))  # At least 1 page
+        
+        # Time per page (more fair for pagination crawls)
+        time_per_page = exec_time / pages_collected
+        
+        # Dynamic penalty based on time per page
+        # - Single page: penalize if > 30s per page
+        # - Multi-page: penalize if > 15s per page (should be faster with pagination)
+        if pages_collected == 1:
+            # Single page crawl: allow more time
+            if time_per_page > 30000:  # > 30s
+                time_penalty = min(0.3, (time_per_page - 30000) / 60000)  # Up to 30% penalty
+            else:
+                time_penalty = 0.0
+        else:
+            # Multi-page crawl: expect efficiency
+            if time_per_page > 15000:  # > 15s per page
+                time_penalty = min(0.4, (time_per_page - 15000) / 45000)  # Up to 40% penalty
+            else:
+                # Bonus for fast pagination!
+                if time_per_page < 10000:  # < 10s per page
+                    time_penalty = -0.1  # 10% bonus for efficiency
+                else:
+                    time_penalty = 0.0
+        
+        efficiency_score = no_errors * max(0.0, min(1.0, 1.0 - time_penalty))
+        
+        # Weighted sum
+        reward = (
+            success * 0.25 +          # 25%: Basic success
+            has_data * 0.15 +         # 15%: Data extracted
+            validation * 0.30 +       # 30%: Validation quality (biggest weight)
+            quantity_score * 0.15 +   # 15%: Quantity
+            efficiency_score * 0.15   # 15%: Pagination-aware efficiency
         )
+        
+        return max(0.0, min(1.0, reward))  # Clamp to [0, 1]
 
     def _extract_domain(self, url: str) -> str:
         """Extract domain from URL"""
         from urllib.parse import urlparse
         return urlparse(url).netloc
 
+    def _infer_pattern_type(self, extracted_data: list, extraction_schema: dict, 
+                           user_description: str = "") -> str:
+        """
+        Infer pattern type from extraction results
+        Same logic as algorithm's _classify_pattern_type but agent-side
+        """
+        if not extracted_data:
+            return "generic_extraction"
+        
+        # Get fields from first extracted item
+        extraction_fields = list(extracted_data[0].keys()) if extracted_data else []
+        if not extraction_fields:
+            return "generic_extraction"
+        
+        fields_lower = [f.lower() for f in extraction_fields]
+        
+        # E-commerce product patterns
+        if any(f in fields_lower for f in ["price", "product_name", "product_title"]):
+            if any(f in fields_lower for f in ["rating", "review", "stars"]):
+                return "product_with_reviews"
+            return "product_list"
+        
+        # Article/content patterns
+        if any(f in fields_lower for f in ["headline", "title", "content", "article"]):
+            if any(f in fields_lower for f in ["author", "date", "published"]):
+                return "article_extraction"
+            return "content_extraction"
+        
+        # Review extraction
+        if any(f in fields_lower for f in ["rating", "review", "comment"]):
+            return "review_extraction"
+        
+        # Contact info
+        if any(f in fields_lower for f in ["email", "phone", "address"]):
+            return "contact_info"
+        
+        return "generic_extraction"
+    
+    def _get_quality_threshold(self, pattern_type: str) -> Dict[str, float]:
+        """
+        Get quality thresholds for different pattern types
+        
+        Returns:
+            {
+                "min_items": minimum items for success,
+                "success_threshold": reward threshold for "successful" pattern (>0.7),
+                "excellent_threshold": reward threshold for "excellent" pattern (>0.9)
+            }
+        """
+        thresholds = {
+            "product_list": {
+                "min_items": 5,
+                "success_threshold": 0.75,
+                "excellent_threshold": 0.90
+            },
+            "product_with_reviews": {
+                "min_items": 3,
+                "success_threshold": 0.70,
+                "excellent_threshold": 0.85
+            },
+            "article_extraction": {
+                "min_items": 1,
+                "success_threshold": 0.80,
+                "excellent_threshold": 0.95
+            },
+            "review_extraction": {
+                "min_items": 5,
+                "success_threshold": 0.70,
+                "excellent_threshold": 0.85
+            },
+            "contact_info": {
+                "min_items": 1,
+                "success_threshold": 0.85,
+                "excellent_threshold": 0.95
+            },
+            "price_extraction": {
+                "min_items": 3,
+                "success_threshold": 0.80,
+                "excellent_threshold": 0.90
+            },
+            "generic_extraction": {
+                "min_items": 1,
+                "success_threshold": 0.70,
+                "excellent_threshold": 0.85
+            }
+        }
+        
+        return thresholds.get(pattern_type, thresholds["generic_extraction"])
+
     # Standalone execution methods (non-Agent Lightning)
     async def execute_crawl(self, task: Dict[str, Any],
                            resources: Optional[Dict] = None,
-                           kafka_publisher=None) -> Dict[str, Any]:
+                           kafka_publisher=None,
+                           learned_patterns: Optional[list] = None) -> Dict[str, Any]:
         """
         Standalone execution method (without Agent Lightning).
         Used for testing or direct invocation.
         Supports Kafka real-time progress events.
+        
+        Args:
+            learned_patterns: Patterns retrieved from knowledge store (Qdrant+Neo4j)
+                            to enhance crawl strategy
         """
 
         if resources is None:
@@ -268,12 +552,41 @@ Return only the number (0.0-1.0).
             if kafka_publisher is not None:
                 self.base_crawler.kafka_publisher = kafka_publisher
 
+            # Log learned patterns usage
+            if learned_patterns:
+                logger.info(f"🧠 Using {len(learned_patterns)} learned patterns to enhance crawl:")
+                for i, pattern in enumerate(learned_patterns[:3], 1):  # Show top 3
+                    logger.info(f"   Pattern {i}: {pattern.get('type', 'unknown')} "
+                              f"(success={pattern.get('success_rate', 0):.2f}, "
+                              f"freq={pattern.get('frequency', 0)}, "
+                              f"score={pattern.get('score', 0):.2f})")
+            else:
+                logger.info("📦 No learned patterns - using frozen resources only")
+
             # Use 'prompt' field (preferred) or fall back to 'user_description'
             prompt = task.get("prompt") or task.get("user_description", "")
             
+            # Enhance prompt with learned patterns knowledge
+            enhanced_prompt = prompt
+            if learned_patterns and len(learned_patterns) > 0:
+                # Use best pattern's metadata to enhance crawl
+                best_pattern = learned_patterns[0]  # Highest score
+                pattern_metadata = best_pattern.get("metadata", {})
+                
+                # Add hints from successful patterns
+                if pattern_metadata.get("successful_selectors"):
+                    enhanced_prompt += f"\n\nHint: Previous successful extractions used selectors like: {pattern_metadata['successful_selectors']}"
+                
+                # Add pagination strategy hints
+                pagination = pattern_metadata.get("pagination", {})
+                if pagination.get("used_pagination"):
+                    strategy = pagination.get("pagination_strategy", "unknown")
+                    logger.info(f"💡 Applying learned pagination strategy: {strategy}")
+                    enhanced_prompt += f"\n\nHint: This site typically uses {strategy} pagination."
+            
             result = await self.base_crawler.intelligent_crawl(
                 url=task["url"],
-                prompt=prompt,
+                prompt=enhanced_prompt,  # Use enhanced prompt
                 job_id=task.get("job_id"),
                 user_id=task.get("user_id"),
                 navigation_steps=task.get("navigation_steps"),
@@ -300,6 +613,21 @@ Return only the number (0.0-1.0).
             logger.info(f"   ✓ execution_time: {result.get('execution_time_ms', 0)}ms")
             logger.info("=" * 80)
 
+            # Calculate reward if in training mode
+            calculated_reward = None
+            if self.mode == "training" and result.get("success"):
+                # Calculate multi-dimensional reward for training
+                validation_score = self._validate_extraction(
+                    extracted_data,
+                    task.get("extraction_schema", {})
+                )
+                calculated_reward = self._calculate_base_reward(
+                    result,
+                    extracted_data,
+                    validation_score
+                )
+                logger.info(f"📊 Calculated reward: {calculated_reward:.3f} (validation: {validation_score:.2f})")
+
             return {
                 "success": result.get("success", False),
                 "data": extracted_data,
@@ -307,6 +635,7 @@ Return only the number (0.0-1.0).
                 "execution_time_ms": result.get("execution_time_ms", 0),
                 "conversation_name": result.get("conversation_name", "Data Collection"),
                 "embedding_data": embedding_data,  # NEW: Pre-generated embeddings
+                "calculated_reward": calculated_reward,  # NEW: For training mode
                 "metadata": {
                     "execution_time_ms": result.get("execution_time_ms", 0),
                     "pages_collected": result.get("navigation_result", {}).get("pages_collected", 0),

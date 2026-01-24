@@ -91,7 +91,14 @@ class QdrantRAGService:
         return f"{COLLECTION_PREFIX}{timestamp}"
     
     def _parse_products(self, context: str) -> List[Dict[str, Any]]:
-        """Parse context string to extract products."""
+        """Parse context string to extract products.
+        
+        IMPORTANT: Preserves source metadata fields:
+        - _source: Source type ("crawl_job", "csv_file", etc.)
+        - _crawl_job_id: Unique job identifier
+        - _source_url: Origin URL
+        - _job_prompt: Original user prompt for the crawl
+        """
         import re
         
         try:
@@ -106,7 +113,7 @@ class QdrantRAGService:
                 for key in ["products", "items", "data", "results"]:
                     if key in data and isinstance(data[key], list):
                         return data[key]
-                # Single product
+                # Single product - source metadata preserved automatically
                 return [data]
             
             return []
@@ -119,7 +126,9 @@ class QdrantRAGService:
             # Try to find JSON objects in text first - use more sophisticated extraction
             # This regex handles nested objects better
             def extract_json_objects(text):
-                """Extract all valid JSON objects from text, handling nested braces."""
+                """Extract all valid JSON objects from text, handling nested braces.
+                Preserves source metadata fields if present.
+                """
                 objects = []
                 i = 0
                 while i < len(text):
@@ -160,6 +169,7 @@ class QdrantRAGService:
             json_objects = extract_json_objects(context)
             for obj in json_objects:
                 if isinstance(obj, dict) and any(k in obj for k in ['name', 'title', 'product_name', 'productName', 'price', 'brand']):
+                    # Source metadata (_source, _crawl_job_id, etc.) already preserved in obj
                     products.append(obj)
             
             if products:
@@ -179,7 +189,8 @@ class QdrantRAGService:
                     products.append({
                         "raw_text": line,
                         "chunk_index": idx + 1,
-                        "_is_text_chunk": True
+                        "_is_text_chunk": True,
+                        "_source": "text_chunk"  # Add source metadata for text chunks
                     })
                 logger.info(f"Extracted {len(products)} text chunks from context")
                 return products
@@ -189,7 +200,8 @@ class QdrantRAGService:
                 products.append({
                     "raw_text": context.strip(),
                     "chunk_index": 1,
-                    "_is_text_chunk": True
+                    "_is_text_chunk": True,
+                    "_source": "text_chunk"
                 })
             
             return products
@@ -319,13 +331,23 @@ class QdrantRAGService:
             text = self._product_to_text(product, i)
             embedding = self._embed_text(text)
             
+            # Extract source metadata from product (injected by C#)
+            source_metadata = {
+                "source": product.get("_source", "unknown"),
+                "crawl_job_id": product.get("_crawl_job_id"),
+                "source_url": product.get("_source_url"),
+                "job_prompt": product.get("_job_prompt")
+            }
+            
             point = PointStruct(
                 id=i,
                 vector=embedding,
                 payload={
                     "text": text,
                     "product_data": product,
-                    "product_index": i
+                    "product_index": i,
+                    # Add source metadata to payload for filtering/comparison
+                    **source_metadata
                 }
             )
             points.append(point)

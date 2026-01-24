@@ -268,7 +268,8 @@ async def process_training_job(job: Dict):
             "url": job["url"],
             "user_description": job["prompt"],
             "extraction_schema": job.get("schema", {}),
-            "feedback_from_previous": job.get("feedback_from_previous")
+            "feedback_from_previous": job.get("feedback_from_previous"),
+            "max_pages": job.get("max_pages")  # Pass max_pages to crawler
         }
         
         result = await agent.execute_crawl(task)
@@ -280,8 +281,17 @@ async def process_training_job(job: Dict):
             admin_id
         )
         
-        # 2. Calculate reward
-        reward = 0.8 if result["success"] else 0.2
+        # Broadcast job_completed event (global)
+        logger.info(f"📡 Broadcasting job_completed for {job_id}: success={result['success']}, items={len(result.get('data', []))}")
+        await broadcast_job_completed(job_id, result)
+        logger.info(f"✅ job_completed event sent")
+        
+        # 2. Get calculated reward from agent execution
+        # Agent already calculated base_reward in _calculate_base_reward() during training rollout
+        # Use that calculated reward instead of hardcoded 0.8
+        reward = result.get("calculated_reward", 0.8 if result["success"] else 0.2)
+        
+        logger.info(f"📊 Reward: {reward:.3f} (success={result['success']}, items={len(result.get('data', []))})")
         
         # Emit learning started
         await training_hub.emit_training_progress(
@@ -425,6 +435,7 @@ class TrainCrawlRequest(BaseModel):
     user_description: str
     extraction_schema: Optional[Dict[str, Any]] = None
     feedback_from_previous: Optional[str] = None
+    max_pages: Optional[int] = None  # Null = try prompt extraction, fallback to 50
 
 
 class FeedbackRequest(BaseModel):
@@ -478,6 +489,7 @@ async def train_crawl(request: TrainCrawlRequest, admin_id: str = "admin"):
             "prompt": request.user_description,
             "schema": request.extraction_schema or {},
             "feedback_from_previous": request.feedback_from_previous,
+            "max_pages": request.max_pages,  # Add max_pages support for admin
             "submitted_at": datetime.utcnow().isoformat()
         }
         
@@ -1354,7 +1366,14 @@ async def broadcast_job_completed(job_id: str, result: dict):
         "success": result["success"],
         "items_count": len(result.get("data", []))
     }
-    await sio.emit('job_completed', message)
+    logger.info(f"🔔 Emitting job_completed: {message}")
+    
+    # Send asynchronously like crawl_log (non-blocking)
+    asyncio.create_task(
+        sio.emit('job_completed', message)
+    )
+    
+    logger.info(f"✅ job_completed emitted successfully")
 
 
 async def broadcast_feedback_received(job_id: str, interpretation: dict):

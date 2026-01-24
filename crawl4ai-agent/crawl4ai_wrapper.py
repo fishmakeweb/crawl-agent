@@ -1042,6 +1042,7 @@ Return ONLY valid JSON, no other text.
         executed_steps = []
         collected_pages = []
         collected_page_urls = []  # LOCAL state - no persistent instance attributes
+        pagination_strategies_used = []  # Track which pagination strategies were actually used
         visited_urls = set()  # Track analyzed URLs to prevent re-analysis loops
         visited_urls.add(url)  # Mark initial URL as analyzed
 
@@ -1146,9 +1147,14 @@ Return ONLY valid JSON, no other text.
                         job_id=job_id,
                         user_id=user_id
                     )
-                    # Extract html_pages and page_urls from result
+                    # Extract html_pages, page_urls, and strategy from result
                     html_pages = pagination_result.get("html_pages", [])
                     page_urls = pagination_result.get("page_urls", [])
+                    strategy_used = pagination_result.get("strategy_used", "unknown")
+                    
+                    # Track strategy
+                    if strategy_used != "unknown":
+                        pagination_strategies_used.append(strategy_used)
                     
                     collected_pages.extend(html_pages)
                     
@@ -1159,6 +1165,7 @@ Return ONLY valid JSON, no other text.
                         "action": action,
                         "selector": selector,
                         "pages_collected": len(html_pages),
+                        "strategy_used": strategy_used,  # Track which strategy worked
                         "success": True
                     })
 
@@ -1200,12 +1207,21 @@ Return ONLY valid JSON, no other text.
                 "success": False
             })
 
+        # Determine primary pagination strategy used (most common or last one)
+        primary_strategy = "unknown"
+        if pagination_strategies_used:
+            # Use the most common strategy, or last one if all different
+            from collections import Counter
+            strategy_counts = Counter(pagination_strategies_used)
+            primary_strategy = strategy_counts.most_common(1)[0][0]
+
         return {
             "final_url": current_url,
             "executed_steps": executed_steps,
             "pages_collected": len(collected_pages),
             "collected_pages": collected_pages,
-            "page_urls": collected_page_urls  # Local variable - no state pollution
+            "page_urls": collected_page_urls,  # Local variable - no state pollution
+            "strategy_used": primary_strategy  # Expose pagination strategy used!
         }
 
     async def _extract_data_parallel(
@@ -2229,9 +2245,20 @@ Return ONLY the JSON array, no other text.
         if len(page_urls) != len(deduplicated_urls):
             logger.info(f"Removed {len(page_urls) - len(deduplicated_urls)} duplicate URLs from page_urls list")
         
+        # Determine which strategy was actually used (last successful one)
+        # Priority: url_navigation > javascript_click > click_next_button
+        actual_strategy = "unknown"
+        if has_valid_href and navigation_success and current_strategy == "url_navigation":
+            actual_strategy = "url_navigation"
+        elif navigation_success and current_strategy == "javascript_click":
+            actual_strategy = "javascript_click"
+        elif navigation_success:
+            actual_strategy = "click_next_button"
+        
         return {
             "html_pages": html_pages,
-            "page_urls": deduplicated_urls
+            "page_urls": deduplicated_urls,
+            "strategy_used": actual_strategy  # Track which navigation method worked!
         }
 
     async def _extract_data(
@@ -3196,6 +3223,9 @@ Example: [{{"type": "product", "name": "...", "price": "..."}}, ...]
     def _deduplicate_items(self, items: list) -> list:
         """
         Remove duplicate items based on content similarity.
+        
+        Uses a smart key-based approach that preserves items with different sizes/variants
+        (e.g., "Product 300ml" vs "Product 150ml" are kept as separate items).
 
         Args:
             items: List of extracted items
@@ -3206,19 +3236,66 @@ Example: [{{"type": "product", "name": "...", "price": "..."}}, ...]
         if not items:
             return []
 
-        # Convert items to JSON strings for comparison
+        # Smart deduplication: Create a composite key from multiple identifying fields
         seen = set()
         unique_items = []
 
         for item in items:
-            # Create a hashable representation
-            item_str = json.dumps(item, sort_keys=True)
+            if not isinstance(item, dict):
+                # Non-dict items - use string representation
+                item_str = str(item)
+                if item_str not in seen:
+                    seen.add(item_str)
+                    unique_items.append(item)
+                continue
 
-            if item_str not in seen:
-                seen.add(item_str)
+            # Create a composite key from identifying fields
+            # This preserves variations in size, color, variant, etc.
+            key_fields = []
+            
+            # Priority 1: Name/title (normalized but preserving size info)
+            name = None
+            for field in ['product_name', 'name', 'title', 'product', 'item_name']:
+                if field in item and item[field]:
+                    name = str(item[field]).strip().lower()
+                    # Normalize spacing but preserve content (including ml, size, etc.)
+                    name = ' '.join(name.split())
+                    key_fields.append(name)
+                    break
+            
+            # Priority 2: Price (important differentiator)
+            price = None
+            for field in ['price', 'cost', 'amount']:
+                if field in item and item[field]:
+                    # Normalize price format
+                    price_str = str(item[field]).replace(',', '').replace('.', '').replace('₫', '').replace('$', '').strip()
+                    key_fields.append(price_str)
+                    break
+            
+            # Priority 3: Additional identifying fields (variant, size, color, SKU, etc.)
+            for field in ['variant', 'size', 'color', 'sku', 'id', 'product_id', 'url', 'link']:
+                if field in item and item[field]:
+                    key_fields.append(str(item[field]).strip().lower())
+            
+            # Create composite key
+            if key_fields:
+                composite_key = '||'.join(key_fields)
+            else:
+                # Fallback: use full JSON if no identifying fields found
+                composite_key = json.dumps(item, sort_keys=True)
+            
+            if composite_key not in seen:
+                seen.add(composite_key)
                 unique_items.append(item)
+            else:
+                logger.debug(f"Removing duplicate: {composite_key[:100]}...")
 
-        logger.info(f"Deduplication: {len(items)} -> {len(unique_items)} items")
+        removed_count = len(items) - len(unique_items)
+        if removed_count > 0:
+            logger.info(f"Deduplication: {len(items)} -> {len(unique_items)} items (removed {removed_count} duplicates)")
+        else:
+            logger.info(f"Deduplication: {len(items)} items (no duplicates found)")
+        
         return unique_items
 
     async def generate_summary(self, data: Any, prompt: Optional[str] = None) -> Dict[str, Any]:

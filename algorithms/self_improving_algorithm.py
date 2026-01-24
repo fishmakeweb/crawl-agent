@@ -586,31 +586,86 @@ Cycle {self.current_cycle} Learning Summary:
         # Convert job queue data to span-like format
         successful_patterns = []
         failure_patterns = []
+        
+        # Track pattern type statistics for adaptive thresholds
+        pattern_type_stats = defaultdict(lambda: {"total": 0, "rewards": []})
 
         for rollout in rollout_data:
-            if rollout['reward'] > 0.7:
-                # Extract successful pattern
+            # Extract and classify pattern
+            result_data = rollout['result'].get('data', [])
+            extraction_schema = rollout['task'].get('extraction_schema', {})
+            
+            # Get extraction fields from result
+            extraction_fields = []
+            if result_data and len(result_data) > 0:
+                extraction_fields = list(result_data[0].keys())
+            elif extraction_schema:
+                extraction_fields = extraction_schema.get('required', [])
+            
+            # Classify pattern type intelligently
+            pattern_type = self._classify_pattern_type(
+                extraction_fields=extraction_fields,
+                schema=extraction_schema,
+                extracted_data=result_data
+            )
+            
+            # Get dynamic threshold for this pattern type
+            threshold = self._get_success_threshold_for_type(pattern_type)
+            
+            # Track stats for this pattern type
+            pattern_type_stats[pattern_type]["total"] += 1
+            pattern_type_stats[pattern_type]["rewards"].append(rollout['reward'])
+            
+            if rollout['reward'] > threshold["success"]:  # Use dynamic threshold!
+                # Extract pagination information from crawl result
+                navigation_result = rollout['result'].get('navigation_result', {})
+                pagination_info = {
+                    'used_pagination': navigation_result.get('pages_collected', 0) > 1,
+                    'pages_crawled': navigation_result.get('pages_collected', 0),
+                    'pagination_strategy': navigation_result.get('strategy_used', 'unknown'),
+                    'max_pages_requested': rollout['task'].get('max_pages'),
+                    'pagination_successful': navigation_result.get('pages_collected', 0) > 0
+                }
+                
                 successful_patterns.append({
                     'id': rollout['id'],
-                    'type': 'successful_crawl',
+                    'type': pattern_type,  # Intelligent classification!
                     'domain': self._extract_domain_from_url(rollout['task']['url']),
+                    'extraction_fields': extraction_fields,  # Important for semantic search
                     'success_rate': rollout['reward'],
                     'frequency': 1,
-                    'metadata': rollout['result'].get('metadata', {}),
-                    'description': f"Successful crawl for {rollout['task']['url']}"
+                    'metadata': {
+                        **rollout['result'].get('metadata', {}),
+                        'items_extracted': len(result_data),
+                        'user_prompt': rollout['task'].get('user_description', ''),
+                        'quality_tier': self._classify_quality_tier(rollout['reward'], threshold),
+                        'pagination': pagination_info  # Store pagination info!
+                    },
+                    'description': f"{pattern_type} pattern for {self._extract_domain_from_url(rollout['task']['url'])}"
                 })
-            elif rollout['reward'] < 0.3:
-                # Extract failure pattern
+            elif rollout['reward'] < threshold["failure"]:  # Use dynamic threshold!
+                # Extract failure pattern with context
                 failure_patterns.append({
                     'id': rollout['id'],
                     'type': 'failure_pattern',
                     'error': rollout['result'].get('error', 'Unknown error'),
                     'domain': self._extract_domain_from_url(rollout['task']['url']),
-                    'occurrences': 1
+                    'extraction_fields': extraction_fields,  # What it tried to extract
+                    'user_prompt': rollout['task'].get('user_description', ''),
+                    'attempted_pattern_type': pattern_type,  # What it tried to do
+                    'reward': rollout['reward'],  # How bad it failed
+                    'occurrences': 1,
+                    'metadata': rollout['result'].get('metadata', {})
                 })
 
         print(f"     ✓ Found {len(successful_patterns)} successful patterns")
         print(f"     ✓ Analyzed {len(failure_patterns)} failure patterns")
+        
+        # Print pattern type distribution
+        print(f"\n  📊 Pattern Type Distribution:")
+        for ptype, stats in sorted(pattern_type_stats.items(), key=lambda x: x[1]["total"], reverse=True)[:5]:
+            avg_reward = sum(stats["rewards"]) / len(stats["rewards"])
+            print(f"     - {ptype:30s} {stats['total']:3d} samples (avg reward: {avg_reward:.2f})")
 
         # Process feedback from queue
         feedback_insights = []
@@ -755,6 +810,82 @@ Extract the data now. Return ONLY the JSON array.
             return urlparse(url).netloc
         except:
             return "unknown"
+    
+    def _get_success_threshold_for_type(self, pattern_type: str) -> Dict[str, float]:
+        """
+        Get dynamic success/failure thresholds based on pattern type
+        
+        Different pattern types have different quality expectations:
+        - Article extraction: Higher quality needed (fewer items, must be complete)
+        - Product list: Moderate quality (many items, some can be incomplete)
+        - Review extraction: Lower threshold (bulk data)
+        
+        Returns:
+            {
+                "success": reward threshold for successful pattern,
+                "failure": reward threshold for failure pattern,
+                "excellent": reward threshold for excellent pattern
+            }
+        """
+        thresholds = {
+            "product_list": {
+                "failure": 0.40,
+                "success": 0.70,
+                "excellent": 0.90
+            },
+            "product_with_reviews": {
+                "failure": 0.35,
+                "success": 0.65,
+                "excellent": 0.85
+            },
+            "article_extraction": {
+                "failure": 0.50,
+                "success": 0.80,
+                "excellent": 0.95
+            },
+            "review_extraction": {
+                "failure": 0.35,
+                "success": 0.65,
+                "excellent": 0.85
+            },
+            "contact_info": {
+                "failure": 0.45,
+                "success": 0.75,
+                "excellent": 0.95
+            },
+            "price_extraction": {
+                "failure": 0.45,
+                "success": 0.75,
+                "excellent": 0.90
+            },
+            "content_extraction": {
+                "failure": 0.40,
+                "success": 0.70,
+                "excellent": 0.90
+            },
+            "generic_extraction": {
+                "failure": 0.35,
+                "success": 0.65,
+                "excellent": 0.85
+            }
+        }
+        
+        return thresholds.get(pattern_type, thresholds["generic_extraction"])
+    
+    def _classify_quality_tier(self, reward: float, threshold: Dict[str, float]) -> str:
+        """
+        Classify quality tier based on reward and thresholds
+        
+        Returns: "excellent", "good", "acceptable", "poor"
+        """
+        if reward >= threshold["excellent"]:
+            return "excellent"
+        elif reward >= threshold["success"]:
+            return "good"
+        elif reward >= threshold["failure"]:
+            return "acceptable"
+        else:
+            return "poor"
 
 
 # Standalone test

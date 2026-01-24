@@ -265,12 +265,12 @@ class HybridKnowledgeStore:
         # Tier 2: Vector search
         query_embedding = await self._embed_query(query)
 
-        search_results = self.vector_store.search(
+        search_results = self.vector_store.query_points(
             collection_name=self.collection_name,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=top_k,
             score_threshold=self.config.SIMILARITY_THRESHOLD
-        )
+        ).points
 
         patterns = [
             {**hit.payload, "id": hit.id, "score": hit.score}
@@ -568,13 +568,65 @@ Return as JSON with structure:
             print(f"⚠️  Error deleting old patterns: {e}")
 
     async def _embed_pattern(self, pattern: Dict) -> List[float]:
-        """Generate embedding for pattern using Gemini"""
-        text = f"{pattern.get('type', '')} for {pattern.get('domain', '')}: {pattern.get('description', '')}"
+        """
+        Generate embedding for pattern using Gemini
+        Includes type, domain, extraction fields, and pagination info for better semantic matching
+        """
+        # Build rich text representation
+        parts = [
+            f"Pattern type: {pattern.get('type', 'unknown')}",
+            f"Domain: {pattern.get('domain', 'unknown')}",
+        ]
+        
+        # Add extraction fields if available
+        fields = pattern.get('extraction_fields', [])
+        if fields:
+            parts.append(f"Extracts: {', '.join(fields)}")
+        
+        # Add description
+        if pattern.get('description'):
+            parts.append(pattern['description'])
+        
+        # Add metadata context
+        metadata = pattern.get('metadata', {})
+        if metadata.get('user_prompt'):
+            parts.append(f"User intent: {metadata['user_prompt']}")
+        
+        # Add pagination info if used
+        pagination = metadata.get('pagination', {})
+        if pagination.get('used_pagination'):
+            parts.append(f"Uses pagination ({pagination.get('pages_crawled', 0)} pages via {pagination.get('pagination_strategy', 'unknown')})")
+        
+        text = ". ".join(parts)
         return await self.gemini_client.embed(text)
 
     async def _embed_query(self, query: Dict) -> List[float]:
-        """Generate embedding for search query"""
-        text = f"{query.get('domain', '')} {query.get('intent', '')} {query.get('description', '')}"
+        """
+        Generate embedding for search query
+        Includes domain, intent, description, and requested fields
+        """
+        # Build rich query representation
+        parts = []
+        
+        if query.get('domain'):
+            parts.append(f"Domain: {query['domain']}")
+        
+        if query.get('intent'):
+            parts.append(f"Intent: {query['intent']}")
+        
+        if query.get('description'):
+            parts.append(query['description'])
+        
+        # Include requested extraction fields
+        if query.get('extraction_fields'):
+            fields = query['extraction_fields']
+            parts.append(f"Extract: {', '.join(fields)}")
+        
+        # Include user prompt/description
+        if query.get('user_description'):
+            parts.append(f"User wants: {query['user_description']}")
+        
+        text = ". ".join(parts) if parts else "generic extraction"
         return await self.gemini_client.embed(text)
 
     def _generate_cache_key(self, query: Dict) -> str:
@@ -690,6 +742,275 @@ Return as JSON with structure:
                 "success_rate": 0.5  # Neutral until validated
             }
             await self.add_patterns([pattern])
+
+    async def get_patterns_by_type(self, pattern_type: str, top_k: int = 10) -> List[Dict]:
+        """
+        Retrieve patterns by specific type (e.g., 'product_list', 'article_extraction')
+        Useful for type-specific strategy selection
+        """
+        try:
+            # Use Qdrant filter for efficient type-based retrieval
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            
+            search_results = self.vector_store.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="type",
+                            match=MatchValue(value=pattern_type)
+                        )
+                    ]
+                ),
+                limit=top_k,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            patterns = [
+                {**point.payload, "id": point.id}
+                for point in search_results[0]  # scroll returns (points, next_offset)
+            ]
+            
+            # Sort by success_rate and frequency
+            patterns.sort(
+                key=lambda p: (p.get("success_rate", 0), p.get("frequency", 0)),
+                reverse=True
+            )
+            
+            return patterns[:top_k]
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Error retrieving patterns by type '{pattern_type}': {e}")
+            return []
+
+    async def get_best_practices(self, domain: str = None, pattern_type: str = None) -> List[Dict]:
+        """
+        Retrieve best practice patterns (high success rate + high frequency)
+        Optionally filter by domain and/or pattern type
+        """
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+            
+            # Build filter conditions
+            filter_conditions = []
+            
+            # Must have high success rate (> 0.8)
+            filter_conditions.append(
+                FieldCondition(
+                    key="success_rate",
+                    range=Range(gte=0.8)
+                )
+            )
+            
+            # Optional domain filter
+            if domain:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="domain",
+                        match=MatchValue(value=domain)
+                    )
+                )
+            
+            # Optional type filter
+            if pattern_type:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="type",
+                        match=MatchValue(value=pattern_type)
+                    )
+                )
+            
+            search_results = self.vector_store.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=Filter(must=filter_conditions),
+                limit=20,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            patterns = [
+                {**point.payload, "id": point.id}
+                for point in search_results[0]
+            ]
+            
+            # Sort by weighted score (success_rate * log(frequency + 1))
+            import math
+            for p in patterns:
+                p["best_practice_score"] = (
+                    p.get("success_rate", 0) * 
+                    math.log(p.get("frequency", 0) + 1)
+                )
+            
+            patterns.sort(key=lambda p: p["best_practice_score"], reverse=True)
+            
+            logger.info(f"📚 Found {len(patterns)} best practices (domain={domain}, type={pattern_type})")
+            return patterns[:10]
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Error retrieving best practices: {e}")
+            return []
+
+    async def get_pattern_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about pattern types distribution
+        Useful for understanding what the agent has learned
+        """
+        try:
+            stats = {
+                "total_patterns": 0,
+                "by_type": {},
+                "by_domain": {},
+                "high_success_patterns": 0,
+                "frequently_used": 0,
+                "pagination_stats": {
+                    "patterns_with_pagination": 0,
+                    "avg_pages_crawled": 0.0,
+                    "strategies_used": {}
+                }
+            }
+            
+            # Get all patterns
+            all_patterns = self.vector_store.scroll(
+                collection_name=self.collection_name,
+                limit=1000,  # Reasonable limit
+                with_payload=True,
+                with_vectors=False
+            )[0]
+            
+            stats["total_patterns"] = len(all_patterns)
+            
+            # Track pagination stats
+            total_pages = 0
+            pagination_count = 0
+            
+            for point in all_patterns:
+                payload = point.payload
+                
+                # Count by type
+                pattern_type = payload.get("type", "unknown")
+                stats["by_type"][pattern_type] = stats["by_type"].get(pattern_type, 0) + 1
+                
+                # Count by domain
+                domain = payload.get("domain", "unknown")
+                stats["by_domain"][domain] = stats["by_domain"].get(domain, 0) + 1
+                
+                # High success patterns
+                if payload.get("success_rate", 0) > 0.8:
+                    stats["high_success_patterns"] += 1
+                
+                # Frequently used
+                if payload.get("frequency", 0) > 5:
+                    stats["frequently_used"] += 1
+                
+                # Pagination stats
+                metadata = payload.get("metadata", {})
+                pagination = metadata.get("pagination", {})
+                if pagination.get("used_pagination"):
+                    stats["pagination_stats"]["patterns_with_pagination"] += 1
+                    pagination_count += 1
+                    
+                    pages = pagination.get("pages_crawled", 0)
+                    total_pages += pages
+                    
+                    strategy = pagination.get("pagination_strategy", "unknown")
+                    stats["pagination_stats"]["strategies_used"][strategy] = \
+                        stats["pagination_stats"]["strategies_used"].get(strategy, 0) + 1
+            
+            # Calculate average pages crawled
+            if pagination_count > 0:
+                stats["pagination_stats"]["avg_pages_crawled"] = total_pages / pagination_count
+            
+            logger.info(f"📊 Pattern Statistics: {stats['total_patterns']} total, "
+                       f"{len(stats['by_type'])} types, {len(stats['by_domain'])} domains, "
+                       f"{stats['pagination_stats']['patterns_with_pagination']} with pagination")
+            
+            return stats
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Error getting pattern statistics: {e}")
+            return {}
+    
+    async def get_pagination_patterns(self, domain: Optional[str] = None, 
+                                      pattern_type: Optional[str] = None,
+                                      top_k: int = 5) -> List[Dict]:
+        """
+        Retrieve patterns that successfully used pagination
+        Helps agent learn pagination strategies from past successes
+        
+        Args:
+            domain: Optional domain filter (e.g., "shopee.vn")
+            pattern_type: Optional pattern type filter (e.g., "product_list")
+            top_k: Number of results to return
+            
+        Returns:
+            List of patterns with pagination info, sorted by success rate
+        """
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            
+            filter_conditions = []
+            
+            # Must have used pagination
+            # Note: Qdrant doesn't support nested field filtering directly
+            # We'll filter in Python after retrieval
+            
+            # Optional domain filter
+            if domain:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="domain",
+                        match=MatchValue(value=domain)
+                    )
+                )
+            
+            # Optional type filter
+            if pattern_type:
+                filter_conditions.append(
+                    FieldCondition(
+                        key="type",
+                        match=MatchValue(value=pattern_type)
+                    )
+                )
+            
+            # Retrieve candidates
+            search_filter = Filter(must=filter_conditions) if filter_conditions else None
+            
+            search_results = self.vector_store.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=search_filter,
+                limit=100,  # Get more candidates for filtering
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            # Filter for patterns with pagination
+            pagination_patterns = []
+            for point in search_results[0]:
+                payload = point.payload
+                pagination = payload.get("metadata", {}).get("pagination", {})
+                
+                if pagination.get("used_pagination"):
+                    pagination_patterns.append({
+                        **payload,
+                        "id": point.id,
+                        "pagination_info": pagination
+                    })
+            
+            # Sort by success rate
+            pagination_patterns.sort(
+                key=lambda p: p.get("success_rate", 0), 
+                reverse=True
+            )
+            
+            logger.info(f"🔄 Found {len(pagination_patterns)} pagination patterns "
+                       f"(domain={domain}, type={pattern_type})")
+            
+            return pagination_patterns[:top_k]
+            
+        except Exception as e:
+            logger.warning(f"⚠️  Error retrieving pagination patterns: {e}")
+            return []
 
     def close(self):
         """Cleanup connections"""
